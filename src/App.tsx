@@ -1,3 +1,4 @@
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Activity,
   BookOpen,
@@ -22,10 +23,10 @@ import { mibTree, sampleResults } from "./lib/sample-data";
 import type { MibNode } from "./lib/types";
 
 const previewModules = [
-  { name: "SNMPv2-MIB", nodes: 72, active: true },
-  { name: "IF-MIB", nodes: 107, active: true },
-  { name: "IP-MIB", nodes: 184, active: true },
-  { name: "TCP-MIB", nodes: 64, active: false },
+  { name: "SNMPv2-MIB", nodes: 72, active: true, source: "preview" },
+  { name: "IF-MIB", nodes: 107, active: true, source: "preview" },
+  { name: "IP-MIB", nodes: 184, active: true, source: "preview" },
+  { name: "TCP-MIB", nodes: 64, active: false, source: "preview" },
 ];
 
 function findNode(nodes: MibNode[], oid: string): MibNode | undefined {
@@ -39,11 +40,16 @@ function findNode(nodes: MibNode[], oid: string): MibNode | undefined {
 export function App() {
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const [selectedOid, setSelectedOid] = useState("1.3.6.1.2.1.1.5");
+  const [tree, setTree] = useState(mibTree);
   const [queryTab, setQueryTab] = useState("Walk");
   const [connected, setConnected] = useState(false);
   const [modules, setModules] = useState(previewModules);
   const [backendStatus, setBackendStatus] = useState<"checking" | "ready" | "unavailable">("checking");
-  const selected = useMemo(() => findNode(mibTree, selectedOid) ?? mibTree[0], [selectedOid]);
+  const [importStatus, setImportStatus] = useState<string | null>(null);
+  const selected = useMemo(
+    () => findNode(tree, selectedOid) ?? tree[0] ?? mibTree[0],
+    [selectedOid, tree],
+  );
 
   useEffect(() => {
     Promise.all([backend.health(), backend.bundledModules()])
@@ -53,12 +59,40 @@ export function App() {
             name: module.name,
             nodes: 0,
             active: module.enabled,
+            source: module.source,
           })),
         );
         setBackendStatus("ready");
       })
       .catch(() => setBackendStatus("unavailable"));
   }, []);
+
+  async function importMibs() {
+    const selection = await open({
+      multiple: true,
+      filters: [{ name: "MIB files", extensions: ["mib", "smi", "txt", "my"] }],
+    });
+    if (!selection) return;
+
+    const paths = Array.isArray(selection) ? selection : [selection];
+    setImportStatus("Parsing MIB files…");
+    try {
+      const snapshot = await backend.loadMibFiles(paths);
+      setModules(
+        snapshot.modules.map((module) => ({
+          name: module.name,
+          nodes: 0,
+          active: module.enabled,
+          source: module.source,
+        })),
+      );
+      setTree(snapshot.roots);
+      if (snapshot.roots[0]) setSelectedOid(snapshot.roots[0].oid);
+      setImportStatus(`${snapshot.nodeCount} OID nodes loaded`);
+    } catch (error) {
+      setImportStatus(error instanceof Error ? error.message : String(error));
+    }
+  }
 
   return (
     <main className="app" data-theme={theme}>
@@ -98,19 +132,19 @@ export function App() {
         <aside className="panel modules-panel">
           <div className="panel-heading">
             <div><BookOpen size={14} /><strong>MIB modules</strong><span className="count">{modules.length}</span></div>
-            <button className="icon-button small" aria-label="Add MIB"><Plus size={14} /></button>
+            <button className="icon-button small" aria-label="Add MIB" onClick={importMibs}><Plus size={14} /></button>
           </div>
           <div className="search-box"><Search size={14} /><input placeholder="Filter modules" /></div>
           <div className="module-list">
             {modules.map((module) => (
               <button className="module-row" key={module.name}>
                 <span className={`module-status ${module.active ? "active" : ""}`} />
-                <span><strong>{module.name}</strong><small>{module.nodes > 0 ? `${module.nodes} objects` : "Bundled"}</small></span>
+                <span><strong>{module.name}</strong><small>{module.nodes > 0 ? `${module.nodes} objects` : module.source}</small></span>
                 <MoreHorizontal size={14} />
               </button>
             ))}
           </div>
-          <div className="module-footer"><ShieldCheck size={13} /> {modules.filter((module) => module.active).length} modules active</div>
+          <div className="module-footer"><ShieldCheck size={13} /> {importStatus ?? `${modules.filter((module) => module.active).length} modules active`}</div>
         </aside>
 
         <section className="panel tree-panel">
@@ -120,7 +154,7 @@ export function App() {
           </div>
           <div className="search-box"><Search size={14} /><input placeholder="Search name, OID, description" /></div>
           <div className="tree-scroll">
-            <OidTree nodes={mibTree} selectedOid={selectedOid} onSelect={(node) => setSelectedOid(node.oid)} />
+            <OidTree nodes={tree} selectedOid={selectedOid} onSelect={(node) => setSelectedOid(node.oid)} />
           </div>
         </section>
 
@@ -132,7 +166,7 @@ export function App() {
             <code>{selected.oid}</code>
             <div className="tag-row"><span className="tag blue">{selected.syntax ?? "OBJECT IDENTIFIER"}</span><span className="tag green">{selected.access ?? "branch"}</span></div>
             <dl className="metadata">
-              <div><dt>Module</dt><dd>SNMPv2-MIB</dd></div>
+              <div><dt>Module</dt><dd>{selected.module ?? "SNMPv2-MIB"}</dd></div>
               <div><dt>Status</dt><dd>current</dd></div>
               <div><dt>Instance</dt><dd>{selected.kind === "scalar" ? ".0" : "—"}</dd></div>
             </dl>

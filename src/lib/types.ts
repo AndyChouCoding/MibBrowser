@@ -1,7 +1,8 @@
 export type MibNode = {
   name: string;
   oid: string;
-  kind: "folder" | "scalar" | "table";
+  kind: string;
+  module?: string | null;
   access?: "read-only" | "read-write" | "not-accessible";
   syntax?: string;
   description?: string;

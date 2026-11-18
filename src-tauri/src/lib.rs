@@ -10,6 +10,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::health::health_check,
             commands::mib::list_bundled_modules,
+            commands::mib::load_mib_files,
             commands::snmp::supported_snmp_features,
             commands::snmp::validate_snmp_profile,
         ])
