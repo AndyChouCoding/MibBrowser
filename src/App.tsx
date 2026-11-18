@@ -15,12 +15,13 @@ import {
   Sun,
   TerminalSquare,
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { OidTree } from "./components/OidTree";
+import { backend } from "./lib/backend";
 import { mibTree, sampleResults } from "./lib/sample-data";
 import type { MibNode } from "./lib/types";
 
-const modules = [
+const previewModules = [
   { name: "SNMPv2-MIB", nodes: 72, active: true },
   { name: "IF-MIB", nodes: 107, active: true },
   { name: "IP-MIB", nodes: 184, active: true },
@@ -40,7 +41,24 @@ export function App() {
   const [selectedOid, setSelectedOid] = useState("1.3.6.1.2.1.1.5");
   const [queryTab, setQueryTab] = useState("Walk");
   const [connected, setConnected] = useState(false);
+  const [modules, setModules] = useState(previewModules);
+  const [backendStatus, setBackendStatus] = useState<"checking" | "ready" | "unavailable">("checking");
   const selected = useMemo(() => findNode(mibTree, selectedOid) ?? mibTree[0], [selectedOid]);
+
+  useEffect(() => {
+    Promise.all([backend.health(), backend.bundledModules()])
+      .then(([, bundledModules]) => {
+        setModules(
+          bundledModules.map((module) => ({
+            name: module.name,
+            nodes: 0,
+            active: module.enabled,
+          })),
+        );
+        setBackendStatus("ready");
+      })
+      .catch(() => setBackendStatus("unavailable"));
+  }, []);
 
   return (
     <main className="app" data-theme={theme}>
@@ -79,7 +97,7 @@ export function App() {
       <section className="workspace">
         <aside className="panel modules-panel">
           <div className="panel-heading">
-            <div><BookOpen size={14} /><strong>MIB modules</strong><span className="count">4</span></div>
+            <div><BookOpen size={14} /><strong>MIB modules</strong><span className="count">{modules.length}</span></div>
             <button className="icon-button small" aria-label="Add MIB"><Plus size={14} /></button>
           </div>
           <div className="search-box"><Search size={14} /><input placeholder="Filter modules" /></div>
@@ -87,12 +105,12 @@ export function App() {
             {modules.map((module) => (
               <button className="module-row" key={module.name}>
                 <span className={`module-status ${module.active ? "active" : ""}`} />
-                <span><strong>{module.name}</strong><small>{module.nodes} objects</small></span>
+                <span><strong>{module.name}</strong><small>{module.nodes > 0 ? `${module.nodes} objects` : "Bundled"}</small></span>
                 <MoreHorizontal size={14} />
               </button>
             ))}
           </div>
-          <div className="module-footer"><ShieldCheck size={13} /> 3 modules active</div>
+          <div className="module-footer"><ShieldCheck size={13} /> {modules.filter((module) => module.active).length} modules active</div>
         </aside>
 
         <section className="panel tree-panel">
@@ -138,7 +156,7 @@ export function App() {
         </div>
       </section>
 
-      <footer><span><span className={`status-dot ${connected ? "online" : ""}`} /> {connected ? "Session active" : "Ready"}</span><span>UDP · Timeout 2s · Retries 1</span></footer>
+      <footer><span><span className={`status-dot ${backendStatus === "ready" ? "online" : ""}`} /> Backend {backendStatus}</span><span>{connected ? "Session active" : "UDP · Timeout 2s · Retries 1"}</span></footer>
     </main>
   );
 }

@@ -11,6 +11,7 @@ pub fn run() {
             commands::health::health_check,
             commands::mib::list_bundled_modules,
             commands::snmp::supported_snmp_features,
+            commands::snmp::validate_snmp_profile,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MIB Browser");
