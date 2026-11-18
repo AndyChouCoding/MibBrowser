@@ -156,8 +156,10 @@ impl ProfileInput {
                 if username.trim().is_empty() {
                     return Err(ProfileValidationError::MissingUsername);
                 }
-                if matches!(security_level, SecurityLevel::AuthNoPriv | SecurityLevel::AuthPriv)
-                    && auth_password.as_ref().is_none_or(SecretString::is_empty)
+                if matches!(
+                    security_level,
+                    SecurityLevel::AuthNoPriv | SecurityLevel::AuthPriv
+                ) && auth_password.as_ref().is_none_or(SecretString::is_empty)
                 {
                     return Err(ProfileValidationError::MissingAuthPassword);
                 }
@@ -277,9 +279,6 @@ mod tests {
             ..v2_profile("public")
         };
 
-        assert_eq!(
-            profile.validate().unwrap().endpoint,
-            "[2001:db8::10]:161"
-        );
+        assert_eq!(profile.validate().unwrap().endpoint, "[2001:db8::10]:161");
     }
 }
