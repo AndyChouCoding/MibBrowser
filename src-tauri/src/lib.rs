@@ -13,6 +13,7 @@ pub fn run() {
             commands::mib::load_mib_files,
             commands::snmp::supported_snmp_features,
             commands::snmp::validate_snmp_profile,
+            commands::snmp::query_v2c,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MIB Browser");

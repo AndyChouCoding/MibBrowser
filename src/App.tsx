@@ -19,7 +19,7 @@ import {
 import { useEffect, useMemo, useState } from "react";
 import { OidTree } from "./components/OidTree";
 import { backend } from "./lib/backend";
-import { mibTree, sampleResults } from "./lib/sample-data";
+import { mibTree } from "./lib/sample-data";
 import type { MibNode } from "./lib/types";
 
 const previewModules = [
@@ -42,7 +42,12 @@ export function App() {
   const [selectedOid, setSelectedOid] = useState("1.3.6.1.2.1.1.5");
   const [tree, setTree] = useState(mibTree);
   const [queryTab, setQueryTab] = useState("Walk");
-  const [connected, setConnected] = useState(false);
+  const [host, setHost] = useState("");
+  const [port, setPort] = useState("161");
+  const [community, setCommunity] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [status, setStatus] = useState("Ready");
+  const [rows, setRows] = useState<Awaited<ReturnType<typeof backend.query>>>([]);
   const [modules, setModules] = useState(previewModules);
   const [backendStatus, setBackendStatus] = useState<"checking" | "ready" | "unavailable">("checking");
   const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -66,6 +71,24 @@ export function App() {
       })
       .catch(() => setBackendStatus("unavailable"));
   }, []);
+
+  async function runQuery() {
+    if (busy) return;
+    const operation = queryTab === "Get" ? "get" : queryTab === "Get next" ? "getNext" : "walk";
+    const oid = selected.oid + (operation === "get" && selected.kind === "scalar" ? ".0" : "");
+    setBusy(true);
+    setRows([]);
+    setStatus(`Querying ${host}:${port}…`);
+    try {
+      const result = await backend.query(host, Number(port), community, oid, operation);
+      setRows(result);
+      setStatus(`${host}:${port} · ${oid} · ${result.length} results`);
+    } catch (error) {
+      setStatus(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function importMibs() {
     const selection = await open({
@@ -105,7 +128,7 @@ export function App() {
         <div className="connection-bar">
           <label className="field compact target-field">
             <span>Target</span>
-            <input defaultValue="192.168.10.1" aria-label="Target address" />
+            <input disabled={busy} value={host} placeholder="Device address" onChange={(e) => setHost(e.target.value)} aria-label="Target address" />
           </label>
           <label className="field compact">
             <span>Version</span>
@@ -113,12 +136,9 @@ export function App() {
           </label>
           <label className="field compact community-field">
             <span>Community</span>
-            <input type="password" defaultValue="public" aria-label="Community" />
+            <input type="password" disabled={busy} value={community} onChange={(e) => setCommunity(e.target.value)} aria-label="Community" />
           </label>
-          <button className={`connect-button ${connected ? "connected" : ""}`} onClick={() => setConnected(!connected)}>
-            <span className="status-dot" />
-            {connected ? "Connected" : "Connect"}
-          </button>
+          <label className="field compact"><span>Port</span><input type="number" min="1" max="65535" value={port} disabled={busy} onChange={(e) => setPort(e.target.value)} /></label>
         </div>
         <div className="toolbar">
           <button className="icon-button" aria-label="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
@@ -171,7 +191,7 @@ export function App() {
               <div><dt>Instance</dt><dd>{selected.kind === "scalar" ? ".0" : "—"}</dd></div>
             </dl>
             <div className="description"><span>Description</span><p>{selected.description ?? "A branch within the management information tree."}</p></div>
-            <button className="primary-action"><Play size={14} /> Query this object</button>
+            <button className="primary-action" disabled={busy || !host || !community} onClick={runQuery}><Play size={14} /> Query this object</button>
           </div>
         </aside>
       </section>
@@ -179,18 +199,18 @@ export function App() {
       <section className="query-panel">
         <div className="query-header">
           <div className="tabs">
-            {["Get", "Get next", "Walk", "Set", "History"].map((tab) => <button key={tab} className={queryTab === tab ? "active" : ""} onClick={() => setQueryTab(tab)}>{tab}</button>)}
+            {["Get", "Get next", "Walk", "Set", "History"].map((tab) => <button key={tab} disabled={busy || tab === "Set" || tab === "History"} className={queryTab === tab ? "active" : ""} onClick={() => setQueryTab(tab)}>{tab}</button>)}
           </div>
-          <div className="query-actions"><span className="result-summary">3 objects · 55 ms</span><button className="secondary-button"><Download size={13} /> Export</button><button className="run-button"><Play size={13} /> Run {queryTab}</button></div>
+          <div className="query-actions"><span className="result-summary">{status}</span><button className="secondary-button"><Download size={13} /> Export</button><button className="run-button" disabled={busy || !host || !community} onClick={runQuery}><Play size={13} /> Run {queryTab}</button></div>
         </div>
-        <div className="query-input"><span>Root OID</span><code>SNMPv2-MIB::system</code><small>1.3.6.1.2.1.1</small></div>
+        <div className="query-input"><span>Root OID</span><code>{selected.name}</code><small>{selected.oid}{queryTab === "Get" && selected.kind === "scalar" ? ".0" : ""}</small></div>
         <div className="results-table">
           <div className="result-row table-head"><span>Name</span><span>OID</span><span>Type</span><span>Value</span><span>Time</span></div>
-          {sampleResults.map((result) => <div className="result-row" key={result.oid}><span>{result.name}</span><code>{result.oid}</code><span className="type-value">{result.type}</span><span>{result.value}</span><span>{result.durationMs} ms</span></div>)}
+          {rows.map((result) => <div className="result-row" key={result.oid}><span>{findNode(tree, result.oid)?.name ?? findNode(tree, result.oid.replace(/\.0$/, ""))?.name ?? "—"}</span><code>{result.oid}</code><span className="type-value">—</span><span>{result.value}</span><span>{result.durationMs} ms</span></div>)}
         </div>
       </section>
 
-      <footer><span><span className={`status-dot ${backendStatus === "ready" ? "online" : ""}`} /> Backend {backendStatus}</span><span>{connected ? "Session active" : "UDP · Timeout 2s · Retries 1"}</span></footer>
+      <footer><span><span className={`status-dot ${backendStatus === "ready" ? "online" : ""}`} /> Backend {backendStatus}</span><span>SNMP v2c · UDP</span></footer>
     </main>
   );
 }
