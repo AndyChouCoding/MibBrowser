@@ -35,11 +35,13 @@ pub enum SnmpVersion {
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
 pub enum SecurityLevel {
-    NoAuthNoPriv,
-    AuthNoPriv,
-    AuthPriv,
+    #[serde(rename = "noAuthNoPriv")]
+    None,
+    #[serde(rename = "authNoPriv")]
+    Auth,
+    #[serde(rename = "authPriv")]
+    AuthWithPrivacy,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -158,12 +160,12 @@ impl ProfileInput {
                 }
                 if matches!(
                     security_level,
-                    SecurityLevel::AuthNoPriv | SecurityLevel::AuthPriv
+                    SecurityLevel::Auth | SecurityLevel::AuthWithPrivacy
                 ) && auth_password.as_ref().is_none_or(SecretString::is_empty)
                 {
                     return Err(ProfileValidationError::MissingAuthPassword);
                 }
-                if matches!(security_level, SecurityLevel::AuthPriv)
+                if matches!(security_level, SecurityLevel::AuthWithPrivacy)
                     && privacy_password.as_ref().is_none_or(SecretString::is_empty)
                 {
                     return Err(ProfileValidationError::MissingPrivacyPassword);
@@ -258,7 +260,7 @@ mod tests {
             version: SnmpVersion::V3,
             credentials: Credentials::User {
                 username: "operator".to_owned(),
-                security_level: SecurityLevel::AuthPriv,
+                security_level: SecurityLevel::AuthWithPrivacy,
                 auth_password: Some(SecretString("auth-password".to_owned())),
                 privacy_password: None,
             },
