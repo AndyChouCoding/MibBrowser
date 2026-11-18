@@ -15,6 +15,16 @@ The repository currently contains the approved application scaffold and UI found
 
 ## Commands
 
+To install the project-local toolchain and dependencies, then run validation:
+
+```sh
+sh scripts/bootstrap.sh
+```
+
+The bootstrap keeps Rust and Corepack state under the ignored `.tooling/` directory and does not modify the global shell profile.
+
+Individual development commands:
+
 ```sh
 pnpm install
 pnpm tauri dev
