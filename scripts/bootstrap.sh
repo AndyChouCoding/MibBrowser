@@ -12,6 +12,7 @@ export RUSTUP_HOME="$rustup_home"
 export CARGO_HOME="$cargo_home"
 export COREPACK_HOME="$corepack_home"
 export PATH="$cargo_home/bin:$PATH"
+export CI="${CI:-true}"
 
 mkdir -p "$tooling_root" "$corepack_home"
 
@@ -25,6 +26,11 @@ if ! command -v cargo >/dev/null 2>&1; then
     --profile minimal \
     --no-modify-path \
     --yes
+fi
+
+if ! cargo fmt --version >/dev/null 2>&1 || ! cargo clippy --version >/dev/null 2>&1; then
+  echo "Installing Rust validation components"
+  rustup component add rustfmt clippy
 fi
 
 if ! command -v corepack >/dev/null 2>&1; then
