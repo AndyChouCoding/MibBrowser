@@ -33,10 +33,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .manage(commands::write::PendingSet::default())
         .manage(commands::snmp::ActiveQuery::default())
         .invoke_handler(tauri::generate_handler![
             commands::health::health_check,
             export_results,
+            commands::write::prepare_set,
+            commands::write::finish_set,
             commands::storage::save_profile,
             commands::storage::load_profile,
             commands::storage::profile_names,

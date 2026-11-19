@@ -45,6 +45,11 @@ function OidTreeItem({ node, selectedOid, onSelect, depth }: OidTreeItemProps) {
         role="treeitem"
         aria-expanded={hasChildren ? open : undefined}
         aria-selected={selectedOid === node.oid}
+        onKeyDown={event => {
+          if (hasChildren && (event.key === "ArrowRight" || event.key === "ArrowLeft")) {
+            event.preventDefault(); setOpen(event.key === "ArrowRight");
+          }
+        }}
         onClick={() => onSelect(node)}
         onDoubleClick={() => hasChildren && setOpen((value) => !value)}
       >

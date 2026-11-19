@@ -317,6 +317,75 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "run through scripts/test-local-agent.py with an isolated Agent"]
+    async fn isolated_agent_read_versions() {
+        let port = std::env::var("MIB_TEST_PORT")
+            .unwrap()
+            .parse::<u16>()
+            .unwrap();
+        let community = std::env::var("MIB_TEST_COMMUNITY").unwrap();
+        let secret = std::env::var("MIB_TEST_PASSPHRASE").unwrap();
+        let mut modes = vec![Auth::v1(community.clone()), Auth::v2c(community)];
+        use crate::snmp::model::SecurityLevel;
+        for (username, level) in [
+            ("fixtureNone", SecurityLevel::None),
+            ("fixtureAuth", SecurityLevel::Auth),
+            ("fixturePriv", SecurityLevel::AuthWithPrivacy),
+        ] {
+            modes.push(
+                ReadCredentials::V3 {
+                    username: username.into(),
+                    level,
+                    context: String::new(),
+                    auth_password: secret.clone(),
+                    privacy_password: secret.clone(),
+                }
+                .into_auth()
+                .unwrap(),
+            );
+        }
+        for auth in modes {
+            let client = Client::builder(("127.0.0.1", port), auth)
+                .request_timeout(Duration::from_secs(2))
+                .retry(async_snmp::Retry::none())
+                .strict_source(true)
+                .connect()
+                .await
+                .unwrap();
+            let scalar = "1.3.6.1.2.1.1.3.0";
+            let mut rows = Vec::new();
+            read_bindings(
+                &client,
+                scalar.parse().unwrap(),
+                ReadOperation::Get,
+                |batch| {
+                    rows.extend(batch);
+                    Ok(())
+                },
+            )
+            .await
+            .unwrap();
+            assert_eq!(rows[0].oid, scalar);
+            for op in [
+                ReadOperation::GetNext,
+                ReadOperation::Walk,
+                ReadOperation::BulkWalk,
+            ] {
+                if client.version() == Version::V1 && matches!(op, ReadOperation::BulkWalk) {
+                    continue;
+                }
+                let n = read_bindings(&client, "1.3.6.1.2.1.1".parse().unwrap(), op, |batch| {
+                    assert!(batch.iter().all(|b| b.oid.starts_with("1.3.6.1.2.1.1.")));
+                    Ok(())
+                })
+                .await
+                .unwrap();
+                assert!(n > 0);
+            }
+        }
+    }
+
+    #[tokio::test]
     async fn v1_walk_uses_getnext_and_rejects_bulk() {
         let client = async_snmp::ClientBuilder::new(Auth::v1("fixture"))
             .build_with_transport(FixtureAgent)

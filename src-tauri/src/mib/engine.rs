@@ -29,6 +29,10 @@ pub enum MibEngineError {
 }
 
 pub fn load_files(paths: Vec<PathBuf>) -> Result<MibSnapshot, MibEngineError> {
+    Ok(snapshot(&load_model(paths)?))
+}
+
+pub fn load_model(paths: Vec<PathBuf>) -> Result<Mib, MibEngineError> {
     if paths.len() > MAX_IMPORT_FILES {
         return Err(MibEngineError::TooManyFiles);
     }
@@ -56,7 +60,7 @@ pub fn load_files(paths: Vec<PathBuf>) -> Result<MibSnapshot, MibEngineError> {
     }) {
         return Err(MibEngineError::Load(issue.to_string()));
     }
-    Ok(snapshot(&mib))
+    Ok(mib)
 }
 
 fn validate_paths(paths: &[PathBuf]) -> Result<(), MibEngineError> {
@@ -127,6 +131,19 @@ fn node_summary(node: mib_rs::Node<'_>) -> MibNodeSummary {
             .object()
             .and_then(|obj| obj.ty())
             .map(|ty| ty.name().to_owned()),
+        indexes: node
+            .object()
+            .and_then(|obj| obj.row())
+            .into_iter()
+            .flat_map(|row| row.effective_indexes())
+            .map(|idx| idx.name().to_owned())
+            .collect(),
+        enumeration: node
+            .object()
+            .into_iter()
+            .flat_map(|obj| obj.effective_enums())
+            .map(|item| format!("{} ({})", item.label, item.value))
+            .collect(),
         access: node.object().map(|obj| obj.access().to_string()),
         status: node.status().map(|status| status.to_string()),
         children: node.children().map(node_summary).collect(),
@@ -183,6 +200,35 @@ END
             .iter()
             .flat_map(flatten)
             .any(|node| node.name == "testDeviceName"));
+    }
+
+    #[test]
+    #[ignore = "requires local Apple, UCD and LM-SENSORS MIB files"]
+    fn imports_vendor_samples() {
+        let standard = PathBuf::from("/usr/share/snmp/mibs");
+        let mut paths = [
+            "AIRPORT-BASESTATION-3-MIB.txt",
+            "RFC1213-MIB.txt",
+            "UCD-SNMP-MIB.txt",
+            "SNMPv2-MIB.txt",
+        ]
+        .into_iter()
+        .map(|file| standard.join(file))
+        .collect::<Vec<_>>();
+        paths.push(PathBuf::from(
+            std::env::var("MIB_TEST_LM_SENSORS").expect("path to LM-SENSORS-MIB"),
+        ));
+        let result = load_files(paths).unwrap();
+        let nodes: Vec<_> = result.roots.iter().flat_map(flatten).collect();
+        for module in [
+            "AIRPORT-BASESTATION-3-MIB",
+            "UCD-SNMP-MIB",
+            "LM-SENSORS-MIB",
+        ] {
+            assert!(nodes.iter().any(|n| n.module.as_deref() == Some(module)));
+        }
+        assert!(nodes.iter().any(|n| !n.indexes.is_empty()));
+        assert!(nodes.iter().any(|n| !n.enumeration.is_empty()));
     }
 
     #[test]

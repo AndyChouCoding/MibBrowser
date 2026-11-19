@@ -36,7 +36,10 @@ type QueryRequest = {
 };
 export type ProfileSettings = { name: string; host: string; port: number; timeoutMs: number; retries: number };
 export type HistoryItem = { host: string; oid: string; operation: string; resultCount: number };
+export type SetPreview = { token: string; target: string; oid: string; current: string; proposed: string };
 export const backend = {
+  prepareSet: (proposal: { host: string; port: number; credentials: Credentials; paths: string[]; objectOid: string; instance: string; input: string; timeoutMs: number }) => invoke<SetPreview>("prepare_set", { proposal }),
+  finishSet: (token: string, confirm: boolean) => invoke<string>("finish_set", { token, confirm }),
   saveProfile: (settings: ProfileSettings, credentials: Credentials) => invoke<void>("save_profile", { settings, credentials }),
   profileNames: () => invoke<string[]>("profile_names"),
   loadProfile: (name: string) => invoke<[ProfileSettings, Credentials]>("load_profile", { name }),

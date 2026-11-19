@@ -20,7 +20,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { csv, enabledTree, searchNodes } from "./lib/browse";
 import { OidTree } from "./components/OidTree";
-import { backend, type Binding, type Credentials, type HistoryItem } from "./lib/backend";
+import { backend, type Binding, type Credentials, type HistoryItem, type SetPreview } from "./lib/backend";
 import { mibTree } from "./lib/sample-data";
 import type { MibNode } from "./lib/types";
 
@@ -40,8 +40,10 @@ function findNode(nodes: MibNode[], oid: string): MibNode | undefined {
 }
 
 export function App() {
-  const [theme, setTheme] = useState<"dark" | "light">("dark");
+  const [theme, setTheme] = useState<"dark" | "light">(() => { try { return localStorage.getItem("theme") === "light" ? "light" : "dark"; } catch { return "dark"; } });
   const [selectedOid, setSelectedOid] = useState("1.3.6.1.2.1.1.5");
+  const [manualOid, setManualOid] = useState("");
+  const searchInput = useRef<HTMLInputElement>(null);
   const [moduleFilter, setModuleFilter] = useState("");
   const [search, setSearch] = useState("");
   const [pathsLoaded, setPathsLoaded] = useState<string[]>([]);
@@ -76,6 +78,9 @@ export function App() {
   const [profileName, setProfileName] = useState("");
   const [profileNames, setProfileNames] = useState<string[]>([]);
   const [history, setHistory] = useState<[string, HistoryItem][]>([]);
+  const [instance, setInstance] = useState("");
+  const [newValue, setNewValue] = useState("");
+  const [setPreview, setSetPreview] = useState<SetPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [rows, setRows] = useState<Binding[]>([]);
@@ -161,6 +166,20 @@ export function App() {
     } catch { setImportStatus("Module selection could not be saved"); }
   }
 
+  useEffect(() => {
+    function focusSearch(event: KeyboardEvent) {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+        event.preventDefault(); searchInput.current?.focus();
+      }
+    }
+    window.addEventListener("keydown", focusSearch);
+    return () => window.removeEventListener("keydown", focusSearch);
+  }, []);
+
+  function selectOid(oid: string) {
+    setSelectedOid(oid); setManualOid(""); setInstance("");
+  }
+
   function currentCredentials(): Credentials {
     if (version !== "v3") return { version, community };
     return { version, username, context, level,
@@ -196,8 +215,17 @@ export function App() {
 
   async function runQuery() {
     if (busy || !tree.length || queryTab === "History") return;
+    if (queryTab === "Set") {
+      setBusy(true);
+      try {
+        const preview = await backend.prepareSet({ host, port: Number(port), credentials: currentCredentials(), paths: pathsLoaded,
+          objectOid: selected.oid, instance: selected.kind === "scalar" ? "0" : instance, input: newValue, timeoutMs });
+        setSetPreview(preview);
+      } catch (error) { setStatus(String(error)); setBusy(false); }
+      return;
+    }
     const operation = queryTab === "Get" ? "get" : queryTab === "Get next" ? "getNext" : queryTab === "Bulk walk" ? "bulkWalk" : "walk";
-    const oid = selected.oid + (operation === "get" && selected.kind === "scalar" ? ".0" : "");
+    const oid = manualOid.trim() || selected.oid + (operation === "get" && selected.kind === "scalar" ? ".0" : "");
     const id = crypto.randomUUID();
     queryId.current = id;
     setBusy(true);
@@ -261,7 +289,10 @@ export function App() {
           }<label className="field compact"><span>Port</span><input type="number" min="1" max="65535" value={port} disabled={busy} onChange={(e) => setPort(e.target.value)} /></label>
         </div>
         <div className="toolbar">
-          <button className="icon-button" aria-label="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
+          <button className="icon-button" aria-label="Toggle theme" onClick={() => {
+            const next = theme === "dark" ? "light" : "dark"; setTheme(next);
+            try { localStorage.setItem("theme", next); } catch { setStatus("Theme could not be saved"); }
+          }}>
             {theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
           </button>
           <button className="icon-button" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(!settingsOpen); if (!settingsOpen) void backend.profileNames().then(setProfileNames).catch(error => setStatus(String(error))); }}><Settings size={16} /></button>
@@ -300,14 +331,14 @@ export function App() {
             <div><Box size={14} /><strong>OID tree</strong></div>
             <span className="subtle">SMIv2</span>
           </div>
-          <div className="search-box"><Search size={14} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, OID, description" /></div>
+          <div className="search-box"><Search size={14} /><input ref={searchInput} value={search} onChange={e => setSearch(e.target.value)} placeholder="Search name, OID, description" /></div>
           <div className="tree-scroll">
-            {search.trim() ? (hits.length ? hits.slice(0, 200).map(node => <button key={node.oid} className="tree-row" onClick={() => setSelectedOid(node.oid)}>{node.name} · {node.oid}</button>) : <p>No matching objects</p>) : <OidTree nodes={tree} selectedOid={selectedOid} onSelect={(node) => setSelectedOid(node.oid)} />}
+            {search.trim() ? (hits.length ? hits.slice(0, 200).map(node => <button key={node.oid} className="tree-row" onClick={() => selectOid(node.oid)}>{node.name} · {node.oid}</button>) : <p>No matching objects</p>) : <OidTree nodes={tree} selectedOid={selectedOid} onSelect={(node) => selectOid(node.oid)} />}
           </div>
         </section>
 
         <aside className="panel details-panel">
-          <div className="panel-heading"><div><TerminalSquare size={14} /><strong>Object details</strong></div><button className="icon-button small"><Copy size={13} /></button></div>
+          <div className="panel-heading"><div><TerminalSquare size={14} /><strong>Object details</strong></div><button className="icon-button small" aria-label="Copy OID" disabled={!tree.length} onClick={() => navigator.clipboard.writeText(selected.oid).then(() => setStatus("OID copied")).catch(() => setStatus("Clipboard unavailable"))}><Copy size={13} /></button></div>
           {tree.length ? <div className="details-content">
             <div className="object-icon">{selected.kind === "table" ? "T" : "O"}</div>
             <h2>{selected.name}</h2>
@@ -315,6 +346,8 @@ export function App() {
             <div className="tag-row"><span className="tag blue">{selected.syntax ?? "OBJECT IDENTIFIER"}</span><span className="tag green">{selected.access ?? "branch"}</span></div>
             <dl className="metadata">
               <div><dt>Module</dt><dd>{selected.module ?? "—"}</dd></div>
+              {Boolean(selected.indexes?.length) && <div><dt>Index</dt><dd>{selected.indexes?.join(", ")}</dd></div>}
+              {Boolean(selected.enumeration?.length) && <div><dt>Enumeration</dt><dd>{selected.enumeration?.join(", ")}</dd></div>}
               <div><dt>Status</dt><dd>{selected.status ?? "—"}</dd></div>
               <div><dt>Instance</dt><dd>{selected.kind === "scalar" ? ".0" : "—"}</dd></div>
             </dl>
@@ -327,16 +360,31 @@ export function App() {
       <section className="query-panel">
         <div className="query-header">
           <div className="tabs">
-            {["Get", "Get next", "Walk", "Bulk walk", "Set", "History"].map((tab) => <button key={tab} disabled={busy || (tab === "Bulk walk" && version === "v1") || tab === "Set"} className={queryTab === tab ? "active" : ""} onClick={() => { setQueryTab(tab); if (tab === "History") void backend.history().then(setHistory).catch(error => setStatus(String(error))); }}>{tab}</button>)}
+            {["Get", "Get next", "Walk", "Bulk walk", "Set", "History"].map((tab) => <button key={tab} disabled={busy || (tab === "Bulk walk" && version === "v1")} className={queryTab === tab ? "active" : ""} onClick={() => { setQueryTab(tab); if (tab === "History") void backend.history().then(setHistory).catch(error => setStatus(String(error))); }}>{tab}</button>)}
           </div>
-          <div className="query-actions"><span className="result-summary">{status}</span>{busy && <button onClick={() => backend.cancel(queryId.current).catch(error => setStatus(String(error)))}>Cancel</button>}<select aria-label="Export format" value={format} onChange={e => setFormat(e.target.value)}><option value="csv">CSV</option><option value="json">JSON</option></select><button className="secondary-button" disabled={!rows.length || busy} onClick={async () => {
+          <div className="query-actions"><span className="result-summary">{status}</span>{busy && queryTab !== "Set" && <button onClick={() => backend.cancel(queryId.current).catch(error => setStatus(String(error)))}>Cancel</button>}<select aria-label="Export format" value={format} onChange={e => setFormat(e.target.value)}><option value="csv">CSV</option><option value="json">JSON</option></select><button className="secondary-button" disabled={busy || (queryTab === "History" ? !history.length : !rows.length)} onClick={async () => {
             try {
-              const content = format === "json" ? JSON.stringify(rows, null, 2) : csv([["OID","Type","Value","Time (ms)"], ...rows.map(row => [row.oid,row.kind,row.value,String(row.durationMs)])]);
+              const content = queryTab === "History"
+                ? (format === "json" ? JSON.stringify(history.map(([time, item]) => ({time, ...item})), null, 2) : csv([["Time (UTC)", "Target", "OID", "Operation", "Results"], ...history.map(([time, item]) => [time, item.host, item.oid, item.operation, String(item.resultCount)])]))
+                : format === "json" ? JSON.stringify(rows, null, 2) : csv([["OID","Type","Value","Time (ms)"], ...rows.map(row => [row.oid,row.kind,row.value,String(row.durationMs)])]);
               if (await backend.exportResults(format, content)) setStatus("Results exported");
             } catch (error) { setStatus(String(error)); }
           }}><Download size={13} /> Export</button><button className="run-button" disabled={busy || queryTab === "History" || !tree.length || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={13} /> Run {queryTab}</button></div>
         </div>
-        {tree.length > 0 && <div className="query-input"><span>Root OID</span><code>{selected.name}</code><small>{selected.oid}{queryTab === "Get" && selected.kind === "scalar" ? ".0" : ""}</small></div>}
+        {tree.length > 0 && <div className="query-input"><span>Root OID</span><code>{selected.name}</code>{queryTab === "Set" ? <small>{selected.oid}</small> : <input aria-label="Query OID" disabled={busy} value={manualOid} placeholder={selected.oid + (queryTab === "Get" && selected.kind === "scalar" ? ".0" : "")} onChange={e => setManualOid(e.target.value)} />}</div>}
+        {queryTab === "Set" && <div className="query-input">
+          <label>Instance suffix <input disabled={busy || selected.kind === "scalar"} value={selected.kind === "scalar" ? "0" : instance} onChange={e => setInstance(e.target.value)} /></label>
+          <label>New value <input disabled={busy} value={newValue} onChange={e => setNewValue(e.target.value)} /></label>
+        </div>}
+        {setPreview && <dialog open className="set-review" aria-label="Confirm SNMP SET">
+          <h2>Confirm SET</h2><dl><dt>Device</dt><dd>{setPreview.target}</dd><dt>Instance OID</dt><dd>{setPreview.oid}</dd><dt>Current value</dt><dd>{setPreview.current}</dd><dt>New value</dt><dd>{setPreview.proposed}</dd></dl>
+          {[false, true].map(confirm => <button key={String(confirm)} onClick={async () => {
+            setSetPreview(null);
+            try { setStatus(await backend.finishSet(setPreview.token, confirm)); }
+            catch (error) { setStatus(String(error)); }
+            finally { setBusy(false); }
+          }}>{confirm ? "Confirm write" : "Cancel"}</button>)}
+        </dialog>}
         {queryTab === "History" ? <div className="results-table" aria-label="Query history">
           <div className="result-row table-head"><span>Time (UTC)</span><span>Target</span><span>Operation</span><span>OID</span><span>Results</span></div>
           {history.length ? history.map(([time, item], index) => <div className="result-row" key={index}><span>{time}</span><span>{item.host}</span><span>{item.operation}</span><span>{item.oid}</span><span>{item.resultCount}</span></div>) : <p>No recorded queries</p>}

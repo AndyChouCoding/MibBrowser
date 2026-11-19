@@ -3,6 +3,8 @@ export type MibNode = {
   oid: string;
   kind: string;
   module?: string | null;
+  indexes?: string[];
+  enumeration?: string[];
   access?: string | null;
   syntax?: string | null;
   status?: string | null;
