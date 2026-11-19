@@ -3,8 +3,9 @@ export type MibNode = {
   oid: string;
   kind: string;
   module?: string | null;
-  access?: "read-only" | "read-write" | "not-accessible";
-  syntax?: string;
+  access?: string | null;
+  syntax?: string | null;
+  status?: string | null;
   description?: string;
   children?: MibNode[];
 };

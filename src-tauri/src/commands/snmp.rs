@@ -14,6 +14,7 @@ pub enum ReadOperation {
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Binding {
+    kind: String,
     oid: String,
     value: String,
     duration_ms: u64,
@@ -81,6 +82,7 @@ async fn read_bindings<T: async_snmp::Transport>(
             }
         }
         rows.push(Binding {
+            kind: binding.value.kind().as_str().to_owned(),
             oid,
             value: format!("{}", binding.value),
             duration_ms: start.elapsed().as_millis() as u64,

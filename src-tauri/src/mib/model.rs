@@ -16,6 +16,9 @@ pub struct MibNodeSummary {
     pub kind: String,
     pub module: Option<String>,
     pub description: String,
+    pub syntax: Option<String>,
+    pub access: Option<String>,
+    pub status: Option<String>,
     pub children: Vec<MibNodeSummary>,
 }
 

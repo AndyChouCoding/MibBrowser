@@ -112,6 +112,12 @@ fn node_summary(node: mib_rs::Node<'_>) -> MibNodeSummary {
         kind: format!("{:?}", node.kind()).to_lowercase(),
         module: node.module().map(|module| module.name().to_owned()),
         description: node.description().to_owned(),
+        syntax: node
+            .object()
+            .and_then(|obj| obj.ty())
+            .map(|ty| ty.name().to_owned()),
+        access: node.object().map(|obj| obj.access().to_string()),
+        status: node.status().map(|status| status.to_string()),
         children: node.children().map(node_summary).collect(),
     }
 }
@@ -201,7 +207,10 @@ END
         std::env::temp_dir().join(format!(
             "mib-browser-{}-{}.{}",
             std::process::id(),
-            std::thread::current().name().unwrap_or("test"),
+            std::thread::current()
+                .name()
+                .unwrap_or("test")
+                .replace(':', "_"),
             extension
         ))
     }
