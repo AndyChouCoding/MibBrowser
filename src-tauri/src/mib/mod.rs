@@ -4,8 +4,9 @@ pub mod model;
 use model::MibModuleSummary;
 
 pub fn bundled_module_summaries() -> Vec<MibModuleSummary> {
-    ["SNMPv2-SMI", "SNMPv2-TC", "SNMPv2-CONF", "SNMPv2-MIB"]
-        .into_iter()
+    mib_rs::lower::base_modules::base_module_names()
+        .iter()
+        .copied()
         .map(|name| MibModuleSummary {
             name: name.to_owned(),
             source: "bundled".to_owned(),

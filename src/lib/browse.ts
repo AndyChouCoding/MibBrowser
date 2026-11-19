@@ -1,5 +1,14 @@
 import type { MibNode } from "./types";
 
+export function enabledTree(nodes: MibNode[], disabled: ReadonlySet<string>): MibNode[] {
+  if (!disabled.size) return nodes;
+  return nodes.flatMap(node => {
+    const children = enabledTree(node.children ?? [], disabled);
+    if (node.module && disabled.has(node.module)) return children;
+    return [{ ...node, children }];
+  });
+}
+
 export function searchNodes(nodes: MibNode[], term: string): MibNode[] {
   const query = term.trim().toLowerCase();
   const hits: MibNode[] = [];

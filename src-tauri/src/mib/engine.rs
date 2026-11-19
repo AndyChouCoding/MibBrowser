@@ -12,8 +12,6 @@ const ALLOWED_EXTENSIONS: &[&str] = &["mib", "smi", "txt", "my"];
 
 #[derive(Debug, Error)]
 pub enum MibEngineError {
-    #[error("select at least one MIB file")]
-    NoFiles,
     #[error("at most {MAX_IMPORT_FILES} MIB files can be imported at once")]
     TooManyFiles,
     #[error("MIB path is not a regular file: {0}")]
@@ -31,20 +29,33 @@ pub enum MibEngineError {
 }
 
 pub fn load_files(paths: Vec<PathBuf>) -> Result<MibSnapshot, MibEngineError> {
-    if paths.is_empty() {
-        return Err(MibEngineError::NoFiles);
-    }
     if paths.len() > MAX_IMPORT_FILES {
         return Err(MibEngineError::TooManyFiles);
     }
 
     validate_paths(&paths)?;
 
-    let mib = Loader::new()
-        .source(source::files(paths)?)
+    let loader = if paths.is_empty() {
+        Loader::new().modules(
+            mib_rs::lower::base_modules::base_module_names()
+                .iter()
+                .copied(),
+        )
+    } else {
+        Loader::new().source(source::files(paths)?)
+    };
+    let mib = loader
         .load()
         .map_err(|error| MibEngineError::Load(error.to_string()))?;
 
+    if let Some(issue) = mib.diagnostics().iter().find(|issue| {
+        matches!(
+            issue.code,
+            mib_rs::types::DiagCode::ImportModuleNotFound | mib_rs::types::DiagCode::ImportNotFound
+        )
+    }) {
+        return Err(MibEngineError::Load(issue.to_string()));
+    }
     Ok(snapshot(&mib))
 }
 
@@ -187,6 +198,27 @@ END
             .modules
             .iter()
             .any(|module| module.name == "TEST-BROWSER-MIB"));
+    }
+
+    #[test]
+    fn loads_foundation_tree_without_files() {
+        let workspace = load_files(Vec::new()).unwrap();
+        assert!(workspace.modules.iter().any(|m| m.name == "SNMPv2-SMI"));
+        assert!(workspace
+            .roots
+            .iter()
+            .flat_map(flatten)
+            .any(|n| n.name == "enterprises" && n.oid == "1.3.6.1.4.1"));
+    }
+
+    #[test]
+    fn identifies_missing_import_module() {
+        let path = temporary_path("mib");
+        let source = String::from_utf8_lossy(TEST_MIB).replace("FROM SNMPv2-TC", "FROM ABSENT-TC");
+        fs::write(&path, source).unwrap();
+        let error = load_files(vec![path.clone()]).unwrap_err();
+        fs::remove_file(path).unwrap();
+        assert!(error.to_string().contains("ABSENT-TC"), "{error}");
     }
 
     #[test]

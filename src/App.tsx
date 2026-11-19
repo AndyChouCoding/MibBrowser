@@ -18,7 +18,7 @@ import {
 import { getCurrentWebview } from "@tauri-apps/api/webview";
 import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { csv, searchNodes } from "./lib/browse";
+import { csv, enabledTree, searchNodes } from "./lib/browse";
 import { OidTree } from "./components/OidTree";
 import { backend } from "./lib/backend";
 import { mibTree } from "./lib/sample-data";
@@ -45,10 +45,19 @@ export function App() {
   const [moduleFilter, setModuleFilter] = useState("");
   const [search, setSearch] = useState("");
   const [pathsLoaded, setPathsLoaded] = useState<string[]>([]);
+  const pendingImports = useRef<string[]>([]);
   const importLock = useRef(false);
   const [importing, setImporting] = useState(false);
   const [format, setFormat] = useState("csv");
-  const [tree, setTree] = useState(mibTree);
+  const [allNodes, setTree] = useState(mibTree);
+  const [disabledModules, setDisabledModules] = useState<Set<string>>(() => {
+    try {
+      const names: unknown = JSON.parse(localStorage.getItem("workspace.disabledModules") ?? "[]");
+      if (Array.isArray(names) && names.every(name => typeof name === "string")) return new Set(names);
+    } catch { /* Start with every module enabled when storage is unavailable. */ }
+    return new Set();
+  });
+  const tree = useMemo(() => enabledTree(allNodes, disabledModules), [allNodes, disabledModules]);
   const hits = useMemo(() => search.trim() ? searchNodes(tree, search) : [], [tree, search]);
   const [queryTab, setQueryTab] = useState("Walk");
   const [host, setHost] = useState("");
@@ -72,7 +81,7 @@ export function App() {
   );
 
   const loadWorkspace = useCallback(async (paths: string[]) => {
-    if (importLock.current || !paths.length) return;
+    if (importLock.current) return;
     importLock.current = true;
     setImporting(true);
     setImportStatus("Parsing MIB files…");
@@ -82,6 +91,7 @@ export function App() {
         name: module.name, nodes: 0, active: module.enabled, source: module.source,
       })));
       setTree(snapshot.roots);
+      pendingImports.current = [];
       setPathsLoaded(paths);
       if (snapshot.roots[0]) setSelectedOid(snapshot.roots[0].oid);
       setImportStatus(`${snapshot.nodeCount} OID nodes loaded`);
@@ -91,6 +101,7 @@ export function App() {
         setImportStatus("MIB files loaded. Workspace paths could not be saved.");
       }
     } catch (error) {
+      pendingImports.current = String(error).includes("unresolved import") ? paths : [];
       setImportStatus(String(error));
     } finally {
       importLock.current = false;
@@ -100,16 +111,18 @@ export function App() {
 
   useEffect(() => {
     let active = true;
-    Promise.all([backend.health(), backend.bundledModules()])
-      .then(([, bundledModules]) => {
+    Promise.all([backend.health(), backend.loadMibFiles([])])
+      .then(([, foundation]) => {
         if (!active) return;
-        setModules(bundledModules.map(module => ({
+        setTree(foundation.roots);
+        if (foundation.roots[0]) setSelectedOid(foundation.roots[0].oid);
+        setModules(foundation.modules.map(module => ({
           name: module.name, nodes: 0, active: module.enabled, source: module.source,
         })));
         setBackendStatus("ready");
         try {
           const saved: unknown = JSON.parse(localStorage.getItem("workspace.mibPaths") ?? "[]");
-          if (Array.isArray(saved) && saved.every(path => typeof path === "string")) {
+          if (Array.isArray(saved) && saved.length > 0 && saved.every(path => typeof path === "string")) {
             void loadWorkspace(saved);
           }
         } catch {
@@ -125,14 +138,24 @@ export function App() {
     let active = true;
     const listener = getCurrentWebview().onDragDropEvent(({ payload }) => {
       if (active && payload.type === "drop") {
-        void loadWorkspace([...new Set([...pathsLoaded, ...payload.paths])]);
+        void loadWorkspace([...new Set([...pathsLoaded, ...pendingImports.current, ...payload.paths])]);
       }
     }).catch(error => { if (active) setImportStatus(String(error)); });
     return () => { active = false; void listener.then(stop => stop?.()); };
   }, [backendStatus, pathsLoaded, loadWorkspace]);
 
+  function toggleModule(name: string) {
+    const next = new Set(disabledModules);
+    if (next.has(name)) next.delete(name);
+    else next.add(name);
+    setDisabledModules(next);
+    try {
+      localStorage.setItem("workspace.disabledModules", JSON.stringify([...next]));
+    } catch { setImportStatus("Module selection could not be saved"); }
+  }
+
   async function runQuery() {
-    if (busy) return;
+    if (busy || !tree.length) return;
     const operation = queryTab === "Get" ? "get" : queryTab === "Get next" ? "getNext" : "walk";
     const oid = selected.oid + (operation === "get" && selected.kind === "scalar" ? ".0" : "");
     setBusy(true);
@@ -157,7 +180,7 @@ export function App() {
       });
       if (!selection) return;
       const paths = Array.isArray(selection) ? selection : [selection];
-      await loadWorkspace([...new Set([...pathsLoaded, ...paths])]);
+      await loadWorkspace([...new Set([...pathsLoaded, ...pendingImports.current, ...paths])]);
     } catch (error) {
       setImportStatus(String(error));
     }
@@ -210,14 +233,14 @@ export function App() {
           <div className="search-box"><Search size={14} /><input value={moduleFilter} onChange={e => setModuleFilter(e.target.value)} placeholder="Filter modules" /></div>
           <div className="module-list">
             {modules.filter(m => m.name.toLowerCase().includes(moduleFilter.trim().toLowerCase())).map((module) => (
-              <button className="module-row" key={module.name}>
-                <span className={`module-status ${module.active ? "active" : ""}`} />
+              <button className="module-row" key={module.name} aria-pressed={!disabledModules.has(module.name)} onClick={() => toggleModule(module.name)}>
+                <span className={`module-status ${!disabledModules.has(module.name) ? "active" : ""}`} />
                 <span><strong>{module.name}</strong><small>{module.nodes > 0 ? `${module.nodes} objects` : module.source}</small></span>
                 <MoreHorizontal size={14} />
               </button>
             ))}
           </div>
-          <div className="module-footer"><ShieldCheck size={13} /> {importStatus ?? `${modules.filter((module) => module.active).length} modules active`}</div>
+          <div className="module-footer"><ShieldCheck size={13} /> {importStatus ?? `${modules.filter(module => !disabledModules.has(module.name)).length} modules active`}</div>
         </aside>
 
         <section className="panel tree-panel">
@@ -233,7 +256,7 @@ export function App() {
 
         <aside className="panel details-panel">
           <div className="panel-heading"><div><TerminalSquare size={14} /><strong>Object details</strong></div><button className="icon-button small"><Copy size={13} /></button></div>
-          <div className="details-content">
+          {tree.length ? <div className="details-content">
             <div className="object-icon">{selected.kind === "table" ? "T" : "O"}</div>
             <h2>{selected.name}</h2>
             <code>{selected.oid}</code>
@@ -244,8 +267,8 @@ export function App() {
               <div><dt>Instance</dt><dd>{selected.kind === "scalar" ? ".0" : "—"}</dd></div>
             </dl>
             <div className="description"><span>Description</span><p>{selected.description ?? "A branch within the management information tree."}</p></div>
-            <button className="primary-action" disabled={busy || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={14} /> Query this object</button>
-          </div>
+            <button className="primary-action" disabled={busy || !tree.length || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={14} /> Query this object</button>
+          </div> : <p>No enabled objects</p>}
         </aside>
       </section>
 
@@ -259,9 +282,9 @@ export function App() {
               const content = format === "json" ? JSON.stringify(rows, null, 2) : csv([["OID","Type","Value","Time (ms)"], ...rows.map(row => [row.oid,row.kind,row.value,String(row.durationMs)])]);
               if (await backend.exportResults(format, content)) setStatus("Results exported");
             } catch (error) { setStatus(String(error)); }
-          }}><Download size={13} /> Export</button><button className="run-button" disabled={busy || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={13} /> Run {queryTab}</button></div>
+          }}><Download size={13} /> Export</button><button className="run-button" disabled={busy || !tree.length || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={13} /> Run {queryTab}</button></div>
         </div>
-        <div className="query-input"><span>Root OID</span><code>{selected.name}</code><small>{selected.oid}{queryTab === "Get" && selected.kind === "scalar" ? ".0" : ""}</small></div>
+        {tree.length > 0 && <div className="query-input"><span>Root OID</span><code>{selected.name}</code><small>{selected.oid}{queryTab === "Get" && selected.kind === "scalar" ? ".0" : ""}</small></div>}
         <div className="results-table">
           <div className="result-row table-head"><span>Name</span><span>OID</span><span>Type</span><span>Value</span><span>Time</span></div>
           {rows.map((result) => <div className="result-row" key={result.oid}><span>{findNode(tree, result.oid)?.name ?? findNode(tree, result.oid.replace(/\.0$/, ""))?.name ?? "—"}</span><code>{result.oid}</code><span className="type-value">{result.kind}</span><span>{result.value}</span><span>{result.durationMs} ms</span></div>)}
