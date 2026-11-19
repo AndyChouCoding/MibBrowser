@@ -275,6 +275,72 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "run through scripts/test-local-agent.py with an isolated writable Agent"]
+    async fn isolated_agent_lost_set_reply() {
+        use async_snmp::{message::CommunityMessage, pdu::PduType, DecodeConfig};
+        use bytes::Bytes;
+        use tokio::net::UdpSocket;
+        let port: u16 = std::env::var("MIB_TEST_PORT").unwrap().parse().unwrap();
+        let community = std::env::var("MIB_TEST_COMMUNITY").unwrap();
+        let proxy = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+        let proxy_port = proxy.local_addr().unwrap().port();
+        let upstream = UdpSocket::bind(("127.0.0.1", 0)).await.unwrap();
+        upstream.connect(("127.0.0.1", port)).await.unwrap();
+        let relay = tokio::spawn(async move {
+            let mut buffer = [0u8; 8192];
+            loop {
+                let (len, peer) = proxy.recv_from(&mut buffer).await.unwrap();
+                let msg = CommunityMessage::decode(
+                    Bytes::copy_from_slice(&buffer[..len]),
+                    DecodeConfig::default(),
+                )
+                .unwrap()
+                .value;
+                upstream.send(&buffer[..len]).await.unwrap();
+                let n = upstream.recv(&mut buffer).await.unwrap();
+                if msg.pdu().pdu_type() == PduType::SetRequest {
+                    break;
+                }
+                proxy.send_to(&buffer[..n], peer).await.unwrap();
+            }
+        });
+        let client = Client::builder(
+            ("127.0.0.1", port),
+            async_snmp::Auth::v2c(community.clone()),
+        )
+        .connect()
+        .await
+        .unwrap();
+        let oid = "1.3.6.1.2.1.1.6.0".parse().unwrap();
+        let previous = read_current(&client, &oid).await.unwrap();
+        let state = PendingSet::default();
+        let preview = prepare(
+            &state,
+            Proposal {
+                host: "127.0.0.1".into(),
+                port: proxy_port,
+                credentials: ReadCredentials::V2c { community },
+                paths: vec![std::env::var("MIB_TEST_MIB").unwrap().into()],
+                object_oid: "1.3.6.1.2.1.1.6".into(),
+                instance: "0".into(),
+                input: "lost-reply-test".into(),
+                timeout_ms: 250,
+            },
+        )
+        .await
+        .unwrap();
+        let error = finish(&state, preview.token, true).await.unwrap_err();
+        relay.await.unwrap();
+        assert!(error.contains("outcome unknown"));
+        assert_eq!(
+            read_current(&client, &oid).await.unwrap(),
+            Value::OctetString(Bytes::from_static(b"lost-reply-test"))
+        );
+        client.set(&oid, previous.clone()).await.unwrap();
+        assert_eq!(read_current(&client, &oid).await.unwrap(), previous);
+    }
+
+    #[tokio::test]
+    #[ignore = "run through scripts/test-local-agent.py with an isolated writable Agent"]
     async fn isolated_agent_guarded_write() {
         let port = std::env::var("MIB_TEST_PORT").unwrap().parse().unwrap();
         let community = std::env::var("MIB_TEST_COMMUNITY").unwrap();

@@ -28,8 +28,7 @@ async fn export_results(
     .map_err(|e| e.to_string())?
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
+pub fn desktop_builder() -> tauri::Builder<tauri::Wry> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
@@ -52,6 +51,11 @@ pub fn run() {
             commands::snmp::query_device,
             commands::snmp::cancel_query,
         ])
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    desktop_builder()
         .run(tauri::generate_context!())
         .expect("failed to run MIB Browser");
 }

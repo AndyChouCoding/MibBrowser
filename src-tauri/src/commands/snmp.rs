@@ -26,8 +26,12 @@ pub struct ActiveQuery(std::sync::Mutex<Option<(String, tokio::sync::oneshot::Se
 
 #[tauri::command]
 pub fn cancel_query(state: tauri::State<'_, ActiveQuery>, id: String) -> Result<(), String> {
+    cancel(&state, &id)
+}
+
+fn cancel(state: &ActiveQuery, id: &str) -> Result<(), String> {
     let mut active = state.0.lock().map_err(|_| "Query unavailable")?;
-    if active.as_ref().is_some_and(|(key, _)| key == &id) {
+    if active.as_ref().is_some_and(|(key, _)| key == id) {
         if let Some((_, signal)) = active.take() {
             let _ = signal.send(());
         }
@@ -53,6 +57,19 @@ pub async fn query_device(
     state: tauri::State<'_, ActiveQuery>,
     request: QueryRequest,
     on_rows: tauri::ipc::Channel<Vec<Binding>>,
+) -> Result<usize, String> {
+    execute_query(&state, request, |rows| {
+        on_rows
+            .send(rows)
+            .map_err(|_| "Results channel closed".into())
+    })
+    .await
+}
+
+async fn execute_query(
+    state: &ActiveQuery,
+    request: QueryRequest,
+    emit: impl FnMut(Vec<Binding>) -> Result<(), String>,
 ) -> Result<usize, String> {
     let QueryRequest {
         id,
@@ -93,7 +110,7 @@ pub async fn query_device(
         _ = cancelled => Err("Query cancelled".to_owned()),
         result = async {
             let client = builder.connect().await.map_err(|_| "Could not open SNMP transport")?;
-            read_bindings(&client, root, operation, |rows| on_rows.send(rows).map_err(|_| "Results channel closed".into())).await
+            read_bindings(&client, root, operation, emit).await
         } => result
     };
     let mut active = state.0.lock().map_err(|_| "Query unavailable")?;
@@ -257,7 +274,9 @@ mod tests {
     use bytes::Bytes;
     use std::net::SocketAddr;
 
-    struct FixtureAgent;
+    struct FixtureAgent {
+        subtree_size: u32,
+    }
     impl Transport for FixtureAgent {
         fn peer_addr(&self) -> SocketAddr {
             ([127, 0, 0, 1], 161).into()
@@ -286,14 +305,16 @@ mod tests {
                     .value;
             let request = msg.pdu().standard().unwrap();
             let cursor = &request.varbinds()[0].oid;
-            let successors = ["1.3.6.1", "1.3.6.2", "1.3.7"]
-                .into_iter()
-                .map(|s| s.parse::<Oid>().unwrap())
+            let successors = (1..=self.subtree_size)
+                .map(|i| format!("1.3.6.{i}").parse::<Oid>().unwrap())
+                .chain(std::iter::once("1.3.7".parse().unwrap()))
                 .filter(|o| o > cursor);
             let oids = match request.pdu_type() {
                 PduType::GetRequest => vec![cursor.clone()],
                 PduType::GetNextRequest => successors.take(1).collect(),
-                PduType::GetBulkRequest if msg.version() == Version::V2c => successors.collect(),
+                PduType::GetBulkRequest if msg.version() == Version::V2c => {
+                    successors.take(32).collect()
+                }
                 _ => panic!("unexpected request"),
             };
             let reply = ResponsePdu::success(
@@ -386,9 +407,49 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "run through scripts/test-local-agent.py with an isolated Agent"]
+    async fn isolated_agent_cancel_timeout_and_retry() {
+        let port = std::env::var("MIB_TEST_PORT").unwrap().parse().unwrap();
+        let good = std::env::var("MIB_TEST_COMMUNITY").unwrap();
+        let state = ActiveQuery::default();
+        let request = |community: String, retries| QueryRequest {
+            id: "fixture".into(),
+            host: "127.0.0.1".into(),
+            port,
+            credentials: ReadCredentials::V2c { community },
+            oid: "1.3.6.1.2.1.1.3.0".into(),
+            operation: ReadOperation::Get,
+            timeout_ms: 250,
+            retries,
+        };
+        let (result, signal) = tokio::join!(
+            execute_query(&state, request("invalid".into(), 1), |_| Ok(())),
+            async {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                cancel(&state, "fixture")
+            }
+        );
+        signal.unwrap();
+        assert_eq!(result.unwrap_err(), "Query cancelled");
+        let start = Instant::now();
+        assert!(
+            execute_query(&state, request("invalid".into(), 1), |_| Ok(()))
+                .await
+                .is_err()
+        );
+        assert!(start.elapsed() >= Duration::from_millis(500));
+        assert_eq!(
+            execute_query(&state, request(good, 0), |_| Ok(()))
+                .await
+                .unwrap(),
+            1
+        );
+    }
+
+    #[tokio::test]
     async fn v1_walk_uses_getnext_and_rejects_bulk() {
         let client = async_snmp::ClientBuilder::new(Auth::v1("fixture"))
-            .build_with_transport(FixtureAgent)
+            .build_with_transport(FixtureAgent { subtree_size: 2 })
             .unwrap();
         let root: Oid = "1.3.6".parse().unwrap();
         assert_eq!(
@@ -408,9 +469,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streams_large_bulk_walk_in_bounded_batches() {
+        let client = async_snmp::ClientBuilder::new(Auth::v2c("fixture"))
+            .build_with_transport(FixtureAgent { subtree_size: 2048 })
+            .unwrap();
+        let mut batch_count = 0;
+        let rows = read_bindings(
+            &client,
+            "1.3.6".parse().unwrap(),
+            ReadOperation::BulkWalk,
+            |batch| {
+                assert_eq!(batch.len(), 32);
+                batch_count += 1;
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!((rows, batch_count), (2048, 64));
+    }
+
+    #[tokio::test]
     async fn queries_encoded_agent_responses() {
         let client = async_snmp::ClientBuilder::new(Auth::v2c("fixture"))
-            .build_with_transport(FixtureAgent)
+            .build_with_transport(FixtureAgent { subtree_size: 2 })
             .unwrap();
         for (operation, expected) in [
             (ReadOperation::Get, vec!["1.3.6"]),

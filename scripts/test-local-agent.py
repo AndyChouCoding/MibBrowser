@@ -7,6 +7,9 @@ import socket
 import subprocess
 import tempfile
 import time
+import sys
+import sqlite3
+import uuid
 
 root = Path(__file__).resolve().parents[1]
 with tempfile.TemporaryDirectory(prefix="mib-agent-") as directory:
@@ -48,6 +51,30 @@ rouser fixturePriv priv -V fixture
             subprocess.run([str(root / ".tooling/cargo/bin/cargo"), "test", "--manifest-path",
                             "src-tauri/Cargo.toml", "--all-features", "isolated_agent_", "--",
                             "--ignored", "--test-threads=1"], check=True, cwd=root, env=env)
+            if "--desktop" in sys.argv:
+                run_id = str(uuid.uuid4())
+                db = Path.home() / "Library/Application Support" / f"com.mibbrowser.qualification.{run_id}" / "workspace.sqlite"
+                env["MIB_SMOKE_ID"] = run_id
+                try:
+                    for phase in ("import", "restart"):
+                        result = subprocess.run([str(root / "src-tauri/target/release/examples/desktop_smoke")],
+                                                env=dict(env, MIB_SMOKE_PHASE=phase), cwd=root,
+                                                capture_output=True, text=True, timeout=130)
+                        output = result.stdout + result.stderr
+                        if community in output or phrase in output:
+                            raise RuntimeError("Test credential appeared in desktop output")
+                        print(output, flush=True)
+                        result.check_returncode()
+                    if not db.is_file() or community.encode() in db.read_bytes() or phrase.encode() in db.read_bytes():
+                        raise RuntimeError("Workspace database missing or contains test credential")
+                    print("Desktop output and SQLite credential checks passed")
+                finally:
+                    if db.is_file():
+                        with sqlite3.connect(db) as database:
+                            row = database.execute("SELECT id FROM profiles WHERE name='loopback-fixture'").fetchone()
+                        if row:
+                            subprocess.run(["security", "delete-generic-password", "-s", "com.mibbrowser.desktop.profiles",
+                                            "-a", str(uuid.UUID(row[0]))], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         finally:
             if agent.poll() is None:
                 agent.terminate()
