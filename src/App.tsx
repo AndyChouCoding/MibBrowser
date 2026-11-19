@@ -3,7 +3,6 @@ import {
   Activity,
   BookOpen,
   Box,
-  ChevronDown,
   Copy,
   Download,
   Moon,
@@ -16,7 +15,9 @@ import {
   Sun,
   TerminalSquare,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { getCurrentWebview } from "@tauri-apps/api/webview";
+import { isTauri } from "@tauri-apps/api/core";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { csv, searchNodes } from "./lib/browse";
 import { OidTree } from "./components/OidTree";
 import { backend } from "./lib/backend";
@@ -44,6 +45,7 @@ export function App() {
   const [moduleFilter, setModuleFilter] = useState("");
   const [search, setSearch] = useState("");
   const [pathsLoaded, setPathsLoaded] = useState<string[]>([]);
+  const importLock = useRef(false);
   const [importing, setImporting] = useState(false);
   const [format, setFormat] = useState("csv");
   const [tree, setTree] = useState(mibTree);
@@ -51,6 +53,12 @@ export function App() {
   const [queryTab, setQueryTab] = useState("Walk");
   const [host, setHost] = useState("");
   const [port, setPort] = useState("161");
+  const [version, setVersion] = useState<"v1" | "v2c" | "v3">("v2c");
+  const [level, setLevel] = useState<"noAuthNoPriv" | "authNoPriv" | "authPriv">("authPriv");
+  const [username, setUsername] = useState("");
+  const [context, setContext] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [privacyPassword, setPrivacyPassword] = useState("");
   const [community, setCommunity] = useState("");
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Ready");
@@ -63,21 +71,65 @@ export function App() {
     [selectedOid, tree],
   );
 
+  const loadWorkspace = useCallback(async (paths: string[]) => {
+    if (importLock.current || !paths.length) return;
+    importLock.current = true;
+    setImporting(true);
+    setImportStatus("Parsing MIB files…");
+    try {
+      const snapshot = await backend.loadMibFiles(paths);
+      setModules(snapshot.modules.map(module => ({
+        name: module.name, nodes: 0, active: module.enabled, source: module.source,
+      })));
+      setTree(snapshot.roots);
+      setPathsLoaded(paths);
+      if (snapshot.roots[0]) setSelectedOid(snapshot.roots[0].oid);
+      setImportStatus(`${snapshot.nodeCount} OID nodes loaded`);
+      try {
+        localStorage.setItem("workspace.mibPaths", JSON.stringify(paths));
+      } catch {
+        setImportStatus("MIB files loaded. Workspace paths could not be saved.");
+      }
+    } catch (error) {
+      setImportStatus(String(error));
+    } finally {
+      importLock.current = false;
+      setImporting(false);
+    }
+  }, []);
+
   useEffect(() => {
+    let active = true;
     Promise.all([backend.health(), backend.bundledModules()])
       .then(([, bundledModules]) => {
-        setModules(
-          bundledModules.map((module) => ({
-            name: module.name,
-            nodes: 0,
-            active: module.enabled,
-            source: module.source,
-          })),
-        );
+        if (!active) return;
+        setModules(bundledModules.map(module => ({
+          name: module.name, nodes: 0, active: module.enabled, source: module.source,
+        })));
         setBackendStatus("ready");
+        try {
+          const saved: unknown = JSON.parse(localStorage.getItem("workspace.mibPaths") ?? "[]");
+          if (Array.isArray(saved) && saved.every(path => typeof path === "string")) {
+            void loadWorkspace(saved);
+          }
+        } catch {
+          setImportStatus("Unable to restore saved MIB paths");
+        }
       })
-      .catch(() => setBackendStatus("unavailable"));
-  }, []);
+      .catch(() => { if (active) setBackendStatus("unavailable"); });
+    return () => { active = false; };
+  }, [loadWorkspace]);
+
+  useEffect(() => {
+    if (!isTauri() || backendStatus !== "ready") return;
+    let active = true;
+    const listener = getCurrentWebview().onDragDropEvent(({ payload }) => {
+      if (active && payload.type === "drop") {
+        void loadWorkspace([...new Set([...pathsLoaded, ...payload.paths])]);
+      }
+    }).catch(error => { if (active) setImportStatus(String(error)); });
+    return () => { active = false; void listener.then(stop => stop?.()); };
+  }, [backendStatus, pathsLoaded, loadWorkspace]);
 
   async function runQuery() {
     if (busy) return;
@@ -87,7 +139,7 @@ export function App() {
     setRows([]);
     setStatus(`Querying ${host}:${port}…`);
     try {
-      const result = await backend.query(host, Number(port), community, oid, operation);
+      const result = await backend.query(host, Number(port), version === "v3" ? {version, username, context, level, authPassword: level === "noAuthNoPriv" ? "" : authPassword, privacyPassword: level === "authPriv" ? privacyPassword : ""} : {version, community}, oid, operation);
       setRows(result);
       setStatus(`${host}:${port} · ${oid} · ${result.length} results`);
     } catch (error) {
@@ -98,34 +150,16 @@ export function App() {
   }
 
   async function importMibs() {
-    setImporting(true);
     try {
-    const selection = await open({
-      multiple: true,
-      filters: [{ name: "MIB files", extensions: ["mib", "smi", "txt", "my"] }],
-    });
-    if (!selection) return;
-
-    const paths = Array.isArray(selection) ? selection : [selection];
-    setImportStatus("Parsing MIB files…");
-      const merged = [...new Set([...pathsLoaded, ...paths])];
-      const snapshot = await backend.loadMibFiles(merged);
-      setPathsLoaded(merged);
-      setModules(
-        snapshot.modules.map((module) => ({
-          name: module.name,
-          nodes: 0,
-          active: module.enabled,
-          source: module.source,
-        })),
-      );
-      setTree(snapshot.roots);
-      if (snapshot.roots[0]) setSelectedOid(snapshot.roots[0].oid);
-      setImportStatus(`${snapshot.nodeCount} OID nodes loaded`);
+      const selection = await open({
+        multiple: true,
+        filters: [{ name: "MIB files", extensions: ["mib", "smi", "txt", "my"] }],
+      });
+      if (!selection) return;
+      const paths = Array.isArray(selection) ? selection : [selection];
+      await loadWorkspace([...new Set([...pathsLoaded, ...paths])]);
     } catch (error) {
-      setImportStatus(error instanceof Error ? error.message : String(error));
-    } finally {
-      setImporting(false);
+      setImportStatus(String(error));
     }
   }
 
@@ -144,13 +178,19 @@ export function App() {
           </label>
           <label className="field compact">
             <span>Version</span>
-            <button className="select-button">SNMP v2c <ChevronDown size={13} /></button>
+            <select disabled={busy} value={version} onChange={e => setVersion(e.target.value as typeof version)}><option>v1</option><option>v2c</option><option>v3</option></select>
           </label>
-          <label className="field compact community-field">
+          {version === "v3" ? <details className="usm"><summary>USM credentials</summary><fieldset disabled={busy}>
+            <label>User<input value={username} onChange={e => setUsername(e.target.value)} /></label>
+            <label>Context<input value={context} onChange={e => setContext(e.target.value)} /></label>
+            <select aria-label="Security level" value={level} onChange={e => setLevel(e.target.value as typeof level)}><option>noAuthNoPriv</option><option>authNoPriv</option><option>authPriv</option></select>
+            {level !== "noAuthNoPriv" && <label>SHA-256 password<input type="password" value={authPassword} onChange={e => setAuthPassword(e.target.value)} /></label>}
+            {level === "authPriv" && <label>AES-128 password<input type="password" value={privacyPassword} onChange={e => setPrivacyPassword(e.target.value)} /></label>}
+          </fieldset></details> : <label className="field compact community-field">
             <span>Community</span>
             <input type="password" disabled={busy} value={community} onChange={(e) => setCommunity(e.target.value)} aria-label="Community" />
           </label>
-          <label className="field compact"><span>Port</span><input type="number" min="1" max="65535" value={port} disabled={busy} onChange={(e) => setPort(e.target.value)} /></label>
+          }<label className="field compact"><span>Port</span><input type="number" min="1" max="65535" value={port} disabled={busy} onChange={(e) => setPort(e.target.value)} /></label>
         </div>
         <div className="toolbar">
           <button className="icon-button" aria-label="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
@@ -164,7 +204,8 @@ export function App() {
         <aside className="panel modules-panel">
           <div className="panel-heading">
             <div><BookOpen size={14} /><strong>MIB modules</strong><span className="count">{modules.length}</span></div>
-            <button className="icon-button small" aria-label="Add MIB" disabled={importing} onClick={importMibs}><Plus size={14} /></button>
+            <button className="secondary-button" disabled={importing || !pathsLoaded.length} onClick={() => loadWorkspace(pathsLoaded)}>Reload</button>
+            <button className="icon-button small" aria-label="Add MIB" disabled={importing || backendStatus !== "ready"} onClick={importMibs}><Plus size={14} /></button>
           </div>
           <div className="search-box"><Search size={14} /><input value={moduleFilter} onChange={e => setModuleFilter(e.target.value)} placeholder="Filter modules" /></div>
           <div className="module-list">
@@ -203,7 +244,7 @@ export function App() {
               <div><dt>Instance</dt><dd>{selected.kind === "scalar" ? ".0" : "—"}</dd></div>
             </dl>
             <div className="description"><span>Description</span><p>{selected.description ?? "A branch within the management information tree."}</p></div>
-            <button className="primary-action" disabled={busy || !host || !community} onClick={runQuery}><Play size={14} /> Query this object</button>
+            <button className="primary-action" disabled={busy || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={14} /> Query this object</button>
           </div>
         </aside>
       </section>
@@ -218,7 +259,7 @@ export function App() {
               const content = format === "json" ? JSON.stringify(rows, null, 2) : csv([["OID","Type","Value","Time (ms)"], ...rows.map(row => [row.oid,row.kind,row.value,String(row.durationMs)])]);
               if (await backend.exportResults(format, content)) setStatus("Results exported");
             } catch (error) { setStatus(String(error)); }
-          }}><Download size={13} /> Export</button><button className="run-button" disabled={busy || !host || !community} onClick={runQuery}><Play size={13} /> Run {queryTab}</button></div>
+          }}><Download size={13} /> Export</button><button className="run-button" disabled={busy || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={13} /> Run {queryTab}</button></div>
         </div>
         <div className="query-input"><span>Root OID</span><code>{selected.name}</code><small>{selected.oid}{queryTab === "Get" && selected.kind === "scalar" ? ".0" : ""}</small></div>
         <div className="results-table">
@@ -227,7 +268,7 @@ export function App() {
         </div>
       </section>
 
-      <footer><span><span className={`status-dot ${backendStatus === "ready" ? "online" : ""}`} /> Backend {backendStatus}</span><span>SNMP v2c · UDP</span></footer>
+      <footer><span><span className={`status-dot ${backendStatus === "ready" ? "online" : ""}`} /> Backend {backendStatus}</span><span>SNMP {version} · UDP</span></footer>
     </main>
   );
 }

@@ -21,15 +21,15 @@ pub struct Binding {
 }
 
 #[tauri::command]
-pub async fn query_v2c(
+pub async fn query_device(
     host: String,
     port: u16,
-    community: String,
+    credentials: ReadCredentials,
     oid: String,
     operation: ReadOperation,
 ) -> Result<Vec<Binding>, String> {
-    if host.trim().is_empty() || port == 0 || community.is_empty() {
-        return Err("Enter a target, port and community".into());
+    if host.trim().is_empty() || port == 0 {
+        return Err("Enter a target and port".into());
     }
     let root: Oid = oid
         .trim()
@@ -37,7 +37,7 @@ pub async fn query_v2c(
         .parse()
         .map_err(|_| "Invalid numeric OID")?;
     tokio::time::timeout(Duration::from_secs(30), async {
-        let client = Client::builder((host.trim(), port), Auth::v2c(community))
+        let client = Client::builder((host.trim(), port), credentials.into_auth()?)
             .strict_source(true)
             .connect()
             .await
@@ -46,6 +46,71 @@ pub async fn query_v2c(
     })
     .await
     .map_err(|_| "Query timed out")?
+}
+
+#[derive(Deserialize)]
+#[serde(
+    tag = "version",
+    rename_all = "lowercase",
+    rename_all_fields = "camelCase"
+)]
+pub enum ReadCredentials {
+    V1 {
+        community: String,
+    },
+    V2c {
+        community: String,
+    },
+    V3 {
+        username: String,
+        context: String,
+        level: crate::snmp::model::SecurityLevel,
+        auth_password: String,
+        privacy_password: String,
+    },
+}
+
+impl ReadCredentials {
+    fn into_auth(self) -> Result<Auth, String> {
+        use crate::snmp::model::SecurityLevel;
+        use async_snmp::{AuthProtocol, PrivProtocol, UsmConfig};
+        match self {
+            Self::V1 { community } if !community.is_empty() => Ok(Auth::v1(community)),
+            Self::V2c { community } if !community.is_empty() => Ok(Auth::v2c(community)),
+            Self::V3 {
+                username,
+                context,
+                level,
+                auth_password,
+                privacy_password,
+            } => {
+                if username.trim().is_empty() {
+                    return Err("Enter a v3 username".into());
+                }
+                let base = UsmConfig::new(username).context_name(context);
+                let config = match level {
+                    SecurityLevel::None => Ok(base),
+                    SecurityLevel::Auth if auth_password.len() >= 8 => {
+                        base.auth(AuthProtocol::Sha256, auth_password)
+                    }
+                    SecurityLevel::AuthWithPrivacy
+                        if auth_password.len() >= 8 && privacy_password.len() >= 8 =>
+                    {
+                        base.auth_priv(
+                            AuthProtocol::Sha256,
+                            auth_password,
+                            PrivProtocol::Aes128,
+                            privacy_password,
+                        )
+                    }
+                    _ => return Err("USM passphrases must be at least 8 bytes".into()),
+                }
+                .map_err(|_| "Unable to initialize SNMPv3 security")?;
+                Ok(config.into())
+            }
+            _ => Err("Enter a community".into()),
+        }
+    }
 }
 
 async fn read_bindings<T: async_snmp::Transport>(

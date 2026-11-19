@@ -3,6 +3,10 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
+.usm { position: relative; font-size: .8rem; }
+.usm summary { cursor: pointer; }
+.usm fieldset { position: absolute; z-index: 3; background: var(--panel); color: var(--text); top: 100%; right: 0; display: grid; gap: .6rem; padding: .8rem; }
+.usm label { display: grid; gap: .2rem; }
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 1060px; min-height: 720px; overflow: hidden; }
