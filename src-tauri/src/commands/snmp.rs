@@ -103,7 +103,7 @@ pub async fn query_device(
     result
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(
     tag = "version",
     rename_all = "lowercase",
@@ -126,7 +126,7 @@ pub enum ReadCredentials {
 }
 
 impl ReadCredentials {
-    fn into_auth(self) -> Result<Auth, String> {
+    pub(super) fn into_auth(self) -> Result<Auth, String> {
         use crate::snmp::model::SecurityLevel;
         use async_snmp::{AuthProtocol, PrivProtocol, UsmConfig};
         match self {

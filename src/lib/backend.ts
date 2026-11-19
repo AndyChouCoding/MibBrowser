@@ -34,7 +34,14 @@ type QueryRequest = {
   id: string; host: string; port: number; credentials: Credentials; oid: string;
   operation: "get" | "getNext" | "walk" | "bulkWalk"; timeoutMs: number; retries: number;
 };
+export type ProfileSettings = { name: string; host: string; port: number; timeoutMs: number; retries: number };
+export type HistoryItem = { host: string; oid: string; operation: string; resultCount: number };
 export const backend = {
+  saveProfile: (settings: ProfileSettings, credentials: Credentials) => invoke<void>("save_profile", { settings, credentials }),
+  profileNames: () => invoke<string[]>("profile_names"),
+  loadProfile: (name: string) => invoke<[ProfileSettings, Credentials]>("load_profile", { name }),
+  recordQuery: (item: HistoryItem) => invoke<void>("record_query", { item }),
+  history: () => invoke<[string, HistoryItem][]>("query_history"),
   query: (request: QueryRequest, append: (rows: Binding[]) => void) => {
     const onRows = new Channel<Binding[]>(append);
     return invoke<number>("query_device", { request, onRows });

@@ -37,6 +37,11 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::health::health_check,
             export_results,
+            commands::storage::save_profile,
+            commands::storage::load_profile,
+            commands::storage::profile_names,
+            commands::storage::record_query,
+            commands::storage::query_history,
             commands::mib::list_bundled_modules,
             commands::mib::load_mib_files,
             commands::snmp::supported_snmp_features,

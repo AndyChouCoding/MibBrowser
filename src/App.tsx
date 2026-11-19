@@ -20,7 +20,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { csv, enabledTree, searchNodes } from "./lib/browse";
 import { OidTree } from "./components/OidTree";
-import { backend, type Binding } from "./lib/backend";
+import { backend, type Binding, type Credentials, type HistoryItem } from "./lib/backend";
 import { mibTree } from "./lib/sample-data";
 import type { MibNode } from "./lib/types";
 
@@ -73,6 +73,9 @@ export function App() {
   const [timeoutMs, setTimeoutMs] = useState(2000);
   const [retries, setRetries] = useState(1);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [profileName, setProfileName] = useState("");
+  const [profileNames, setProfileNames] = useState<string[]>([]);
+  const [history, setHistory] = useState<[string, HistoryItem][]>([]);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Ready");
   const [rows, setRows] = useState<Binding[]>([]);
@@ -158,8 +161,41 @@ export function App() {
     } catch { setImportStatus("Module selection could not be saved"); }
   }
 
+  function currentCredentials(): Credentials {
+    if (version !== "v3") return { version, community };
+    return { version, username, context, level,
+      authPassword: level === "noAuthNoPriv" ? "" : authPassword,
+      privacyPassword: level === "authPriv" ? privacyPassword : "" };
+  }
+
+  async function saveProfile() {
+    try {
+      await backend.saveProfile({ name: profileName, host, port: Number(port), timeoutMs, retries }, currentCredentials());
+      setProfileNames(await backend.profileNames());
+      setStatus("Profile saved");
+    } catch (error) { setStatus(String(error)); }
+  }
+
+  async function loadProfile(name: string) {
+    if (!name) return;
+    setBusy(true);
+    try {
+      const [profile, credentials] = await backend.loadProfile(name);
+      setProfileName(profile.name); setHost(profile.host); setPort(String(profile.port));
+      setTimeoutMs(profile.timeoutMs); setRetries(profile.retries); setVersion(credentials.version);
+      setCommunity(credentials.version === "v3" ? "" : credentials.community);
+      setAuthPassword(credentials.version === "v3" ? credentials.authPassword : "");
+      setPrivacyPassword(credentials.version === "v3" ? credentials.privacyPassword : "");
+      if (credentials.version === "v3") {
+        setContext(credentials.context); setLevel(credentials.level); setUsername(credentials.username);
+      } else if (credentials.version === "v1" && queryTab === "Bulk walk") setQueryTab("Walk");
+      setStatus("Profile loaded");
+    } catch (error) { setStatus(String(error)); }
+    finally { setBusy(false); }
+  }
+
   async function runQuery() {
-    if (busy || !tree.length) return;
+    if (busy || !tree.length || queryTab === "History") return;
     const operation = queryTab === "Get" ? "get" : queryTab === "Get next" ? "getNext" : queryTab === "Bulk walk" ? "bulkWalk" : "walk";
     const oid = selected.oid + (operation === "get" && selected.kind === "scalar" ? ".0" : "");
     const id = crypto.randomUUID();
@@ -168,10 +204,12 @@ export function App() {
     setRows([]);
     setStatus(`Querying ${host}:${port}…`);
     try {
-      const result = await backend.query({ id, host, port: Number(port), credentials: version === "v3" ? {version, username, context, level, authPassword: level === "noAuthNoPriv" ? "" : authPassword, privacyPassword: level === "authPriv" ? privacyPassword : ""} : {version, community}, oid, operation, timeoutMs, retries }, batch => {
+      const result = await backend.query({ id, host, port: Number(port), credentials: currentCredentials(), oid, operation, timeoutMs, retries }, batch => {
         if (queryId.current === id) setRows(previous => [...previous, ...batch]);
       });
       setStatus(`${host}:${port} · ${oid} · ${result} results`);
+      try { await backend.recordQuery({ host, oid, operation, resultCount: result }); }
+      catch { setStatus(`${result} results · history could not be saved`); }
     } catch (error) {
       setStatus(String(error));
     } finally {
@@ -226,11 +264,14 @@ export function App() {
           <button className="icon-button" aria-label="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
           </button>
-          <button className="icon-button" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}><Settings size={16} /></button>
+          <button className="icon-button" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => { setSettingsOpen(!settingsOpen); if (!settingsOpen) void backend.profileNames().then(setProfileNames).catch(error => setStatus(String(error))); }}><Settings size={16} /></button>
         </div>
       </header>
 
       {settingsOpen && <fieldset disabled={busy} className="query-settings">
+        <label>Load profile <select value="" onChange={e => void loadProfile(e.target.value)}><option value="">Select profile</option>{profileNames.map(name => <option key={name}>{name}</option>)}</select></label>
+        <label>Profile name <input value={profileName} onChange={e => setProfileName(e.target.value)} /></label>
+        <button disabled={!profileName.trim()} onClick={saveProfile}>Save new profile</button>
         <label>Timeout (ms) <input type="number" min="100" max="120000" value={timeoutMs} onChange={e => setTimeoutMs(Number(e.target.value))} /></label>
         <label>Retries <input type="number" min="0" max="10" value={retries} onChange={e => setRetries(Number(e.target.value))} /></label>
       </fieldset>}
@@ -278,7 +319,7 @@ export function App() {
               <div><dt>Instance</dt><dd>{selected.kind === "scalar" ? ".0" : "—"}</dd></div>
             </dl>
             <div className="description"><span>Description</span><p>{selected.description ?? "A branch within the management information tree."}</p></div>
-            <button className="primary-action" disabled={busy || !tree.length || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={14} /> Query this object</button>
+            <button className="primary-action" disabled={busy || queryTab === "History" || !tree.length || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={14} /> Query this object</button>
           </div> : <p>No enabled objects</p>}
         </aside>
       </section>
@@ -286,20 +327,23 @@ export function App() {
       <section className="query-panel">
         <div className="query-header">
           <div className="tabs">
-            {["Get", "Get next", "Walk", "Bulk walk", "Set", "History"].map((tab) => <button key={tab} disabled={busy || (tab === "Bulk walk" && version === "v1") || tab === "Set" || tab === "History"} className={queryTab === tab ? "active" : ""} onClick={() => setQueryTab(tab)}>{tab}</button>)}
+            {["Get", "Get next", "Walk", "Bulk walk", "Set", "History"].map((tab) => <button key={tab} disabled={busy || (tab === "Bulk walk" && version === "v1") || tab === "Set"} className={queryTab === tab ? "active" : ""} onClick={() => { setQueryTab(tab); if (tab === "History") void backend.history().then(setHistory).catch(error => setStatus(String(error))); }}>{tab}</button>)}
           </div>
           <div className="query-actions"><span className="result-summary">{status}</span>{busy && <button onClick={() => backend.cancel(queryId.current).catch(error => setStatus(String(error)))}>Cancel</button>}<select aria-label="Export format" value={format} onChange={e => setFormat(e.target.value)}><option value="csv">CSV</option><option value="json">JSON</option></select><button className="secondary-button" disabled={!rows.length || busy} onClick={async () => {
             try {
               const content = format === "json" ? JSON.stringify(rows, null, 2) : csv([["OID","Type","Value","Time (ms)"], ...rows.map(row => [row.oid,row.kind,row.value,String(row.durationMs)])]);
               if (await backend.exportResults(format, content)) setStatus("Results exported");
             } catch (error) { setStatus(String(error)); }
-          }}><Download size={13} /> Export</button><button className="run-button" disabled={busy || !tree.length || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={13} /> Run {queryTab}</button></div>
+          }}><Download size={13} /> Export</button><button className="run-button" disabled={busy || queryTab === "History" || !tree.length || !host || !(version === "v3" ? username : community)} onClick={runQuery}><Play size={13} /> Run {queryTab}</button></div>
         </div>
         {tree.length > 0 && <div className="query-input"><span>Root OID</span><code>{selected.name}</code><small>{selected.oid}{queryTab === "Get" && selected.kind === "scalar" ? ".0" : ""}</small></div>}
-        <div className="results-table">
+        {queryTab === "History" ? <div className="results-table" aria-label="Query history">
+          <div className="result-row table-head"><span>Time (UTC)</span><span>Target</span><span>Operation</span><span>OID</span><span>Results</span></div>
+          {history.length ? history.map(([time, item], index) => <div className="result-row" key={index}><span>{time}</span><span>{item.host}</span><span>{item.operation}</span><span>{item.oid}</span><span>{item.resultCount}</span></div>) : <p>No recorded queries</p>}
+        </div> : <div className="results-table">
           <div className="result-row table-head"><span>Name</span><span>OID</span><span>Type</span><span>Value</span><span>Time</span></div>
           {rows.map((result) => <div className="result-row" key={result.oid}><span>{findNode(tree, result.oid)?.name ?? findNode(tree, result.oid.replace(/\.0$/, ""))?.name ?? "—"}</span><code>{result.oid}</code><span className="type-value">{result.kind}</span><span>{result.value}</span><span>{result.durationMs} ms</span></div>)}
-        </div>
+        </div>}
       </section>
 
       <footer><span><span className={`status-dot ${backendStatus === "ready" ? "online" : ""}`} /> Backend {backendStatus}</span><span>SNMP {version} · UDP</span></footer>
