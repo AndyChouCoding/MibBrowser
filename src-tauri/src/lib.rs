@@ -33,6 +33,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .manage(commands::snmp::ActiveQuery::default())
         .invoke_handler(tauri::generate_handler![
             commands::health::health_check,
             export_results,
@@ -41,6 +42,7 @@ pub fn run() {
             commands::snmp::supported_snmp_features,
             commands::snmp::validate_snmp_profile,
             commands::snmp::query_device,
+            commands::snmp::cancel_query,
         ])
         .run(tauri::generate_context!())
         .expect("failed to run MIB Browser");

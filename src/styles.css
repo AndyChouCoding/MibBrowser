@@ -102,3 +102,5 @@ button { color: inherit; }
 .result-row > code { color: var(--muted); font-size: 9px; }.result-row.table-head { height: 28px; background: var(--panel-2); color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-size: 8px; }.type-value { color: #b391ff; }
 footer { border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; padding: 0 12px; color: var(--muted); font-size: 8px; background: var(--panel-2); }
 footer span { display: flex; gap: 6px; align-items: center; }.status-dot.online { background: var(--green); }
+
+.query-settings { position: absolute; top: 50px; right: 15px; z-index: 4; display: grid; gap: 8px; padding: 12px; background: var(--panel); border: 1px solid var(--line); }

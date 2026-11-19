@@ -20,7 +20,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { csv, enabledTree, searchNodes } from "./lib/browse";
 import { OidTree } from "./components/OidTree";
-import { backend } from "./lib/backend";
+import { backend, type Binding } from "./lib/backend";
 import { mibTree } from "./lib/sample-data";
 import type { MibNode } from "./lib/types";
 
@@ -69,9 +69,13 @@ export function App() {
   const [authPassword, setAuthPassword] = useState("");
   const [privacyPassword, setPrivacyPassword] = useState("");
   const [community, setCommunity] = useState("");
+  const queryId = useRef("");
+  const [timeoutMs, setTimeoutMs] = useState(2000);
+  const [retries, setRetries] = useState(1);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("Ready");
-  const [rows, setRows] = useState<Awaited<ReturnType<typeof backend.query>>>([]);
+  const [rows, setRows] = useState<Binding[]>([]);
   const [modules, setModules] = useState(previewModules);
   const [backendStatus, setBackendStatus] = useState<"checking" | "ready" | "unavailable">("checking");
   const [importStatus, setImportStatus] = useState<string | null>(null);
@@ -156,15 +160,18 @@ export function App() {
 
   async function runQuery() {
     if (busy || !tree.length) return;
-    const operation = queryTab === "Get" ? "get" : queryTab === "Get next" ? "getNext" : "walk";
+    const operation = queryTab === "Get" ? "get" : queryTab === "Get next" ? "getNext" : queryTab === "Bulk walk" ? "bulkWalk" : "walk";
     const oid = selected.oid + (operation === "get" && selected.kind === "scalar" ? ".0" : "");
+    const id = crypto.randomUUID();
+    queryId.current = id;
     setBusy(true);
     setRows([]);
     setStatus(`Querying ${host}:${port}…`);
     try {
-      const result = await backend.query(host, Number(port), version === "v3" ? {version, username, context, level, authPassword: level === "noAuthNoPriv" ? "" : authPassword, privacyPassword: level === "authPriv" ? privacyPassword : ""} : {version, community}, oid, operation);
-      setRows(result);
-      setStatus(`${host}:${port} · ${oid} · ${result.length} results`);
+      const result = await backend.query({ id, host, port: Number(port), credentials: version === "v3" ? {version, username, context, level, authPassword: level === "noAuthNoPriv" ? "" : authPassword, privacyPassword: level === "authPriv" ? privacyPassword : ""} : {version, community}, oid, operation, timeoutMs, retries }, batch => {
+        if (queryId.current === id) setRows(previous => [...previous, ...batch]);
+      });
+      setStatus(`${host}:${port} · ${oid} · ${result} results`);
     } catch (error) {
       setStatus(String(error));
     } finally {
@@ -201,7 +208,7 @@ export function App() {
           </label>
           <label className="field compact">
             <span>Version</span>
-            <select disabled={busy} value={version} onChange={e => setVersion(e.target.value as typeof version)}><option>v1</option><option>v2c</option><option>v3</option></select>
+            <select disabled={busy} value={version} onChange={e => { setVersion(e.target.value as typeof version); if (e.target.value === "v1" && queryTab === "Bulk walk") setQueryTab("Walk"); }}><option>v1</option><option>v2c</option><option>v3</option></select>
           </label>
           {version === "v3" ? <details className="usm"><summary>USM credentials</summary><fieldset disabled={busy}>
             <label>User<input value={username} onChange={e => setUsername(e.target.value)} /></label>
@@ -219,10 +226,14 @@ export function App() {
           <button className="icon-button" aria-label="Toggle theme" onClick={() => setTheme(theme === "dark" ? "light" : "dark")}>
             {theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
           </button>
-          <button className="icon-button" aria-label="Settings"><Settings size={16} /></button>
+          <button className="icon-button" aria-label="Settings" aria-expanded={settingsOpen} onClick={() => setSettingsOpen(!settingsOpen)}><Settings size={16} /></button>
         </div>
       </header>
 
+      {settingsOpen && <fieldset disabled={busy} className="query-settings">
+        <label>Timeout (ms) <input type="number" min="100" max="120000" value={timeoutMs} onChange={e => setTimeoutMs(Number(e.target.value))} /></label>
+        <label>Retries <input type="number" min="0" max="10" value={retries} onChange={e => setRetries(Number(e.target.value))} /></label>
+      </fieldset>}
       <section className="workspace">
         <aside className="panel modules-panel">
           <div className="panel-heading">
@@ -275,9 +286,9 @@ export function App() {
       <section className="query-panel">
         <div className="query-header">
           <div className="tabs">
-            {["Get", "Get next", "Walk", "Set", "History"].map((tab) => <button key={tab} disabled={busy || tab === "Set" || tab === "History"} className={queryTab === tab ? "active" : ""} onClick={() => setQueryTab(tab)}>{tab}</button>)}
+            {["Get", "Get next", "Walk", "Bulk walk", "Set", "History"].map((tab) => <button key={tab} disabled={busy || (tab === "Bulk walk" && version === "v1") || tab === "Set" || tab === "History"} className={queryTab === tab ? "active" : ""} onClick={() => setQueryTab(tab)}>{tab}</button>)}
           </div>
-          <div className="query-actions"><span className="result-summary">{status}</span><select aria-label="Export format" value={format} onChange={e => setFormat(e.target.value)}><option value="csv">CSV</option><option value="json">JSON</option></select><button className="secondary-button" disabled={!rows.length || busy} onClick={async () => {
+          <div className="query-actions"><span className="result-summary">{status}</span>{busy && <button onClick={() => backend.cancel(queryId.current).catch(error => setStatus(String(error)))}>Cancel</button>}<select aria-label="Export format" value={format} onChange={e => setFormat(e.target.value)}><option value="csv">CSV</option><option value="json">JSON</option></select><button className="secondary-button" disabled={!rows.length || busy} onClick={async () => {
             try {
               const content = format === "json" ? JSON.stringify(rows, null, 2) : csv([["OID","Type","Value","Time (ms)"], ...rows.map(row => [row.oid,row.kind,row.value,String(row.durationMs)])]);
               if (await backend.exportResults(format, content)) setStatus("Results exported");
