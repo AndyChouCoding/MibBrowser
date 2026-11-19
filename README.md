@@ -36,3 +36,14 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features -
 cargo test --manifest-path src-tauri/Cargo.toml --all-features
 pnpm tauri build
 ```
+
+### Windows x64 development
+
+Install Node.js 24 with Corepack, Visual Studio C++ Build Tools with the Windows SDK, and WebView2. Open PowerShell in the repository and run:
+
+```powershell
+.\scripts\bootstrap.ps1
+corepack.cmd pnpm tauri dev
+```
+
+The script installs a project-local Rust toolchain and runs frontend and Rust checks. To build an NSIS installer from the same shell, run `corepack.cmd pnpm tauri build --bundles nsis`.
