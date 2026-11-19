@@ -10,3 +10,4 @@ src-tauri/gen/
 !.env.example
 /docs/
 .tooling/
+/.pnpm-store/

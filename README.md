@@ -4,7 +4,7 @@ A modern cross-platform MIB browser for macOS and Windows, built with Tauri 2, R
 
 ## Status
 
-The repository currently contains the approved application scaffold and UI foundation. Rust SNMP/MIB integration is gated on the Phase 0 compatibility spike.
+The v1.0.0 development branch includes an offline MIB workspace, SNMP queries and confirmed SET, connection profiles, and history. Release qualification is in progress. See the [user guide and candidate notes](src-tauri/resources/USER-GUIDE.md).
 
 ## Development prerequisites
 
@@ -47,3 +47,13 @@ corepack.cmd pnpm tauri dev
 ```
 
 The script installs a project-local Rust toolchain and runs frontend and Rust checks. To build an NSIS installer from the same shell, run `corepack.cmd pnpm tauri build --bundles nsis`.
+
+### Local integration checks
+
+Run `python3 scripts/test-local-agent.py` on macOS with Python 3, the project Rust toolchain, the system SNMPv2-MIB, and a Net-SNMP daemon compiled with SHA-256 and AES. Set `MIB_TEST_AGENT` to its executable. The script uses a temporary loopback port, ephemeral USM credentials and private state. The Apple-supplied 5.6 daemon lacks SHA-256.
+
+To refresh the bundled license inventory, run `python3 scripts/license-inventory.py` with the bootstrap Cargo, Rustup and Corepack environment after fetching locked dependencies for the three desktop targets.
+
+For macOS desktop qualification, run `sh scripts/test-desktop.sh` in a logged-in session with the same local Agent available. The harness launches the actual WebView twice in a unique workspace, exercises search and module controls, and loads a temporary Keychain profile for loopback queries. The runner checks the test database and desktop output for the fixture credentials, then removes its own Keychain entry.
+
+For a Universal macOS candidate, install the x86_64-apple-darwin and aarch64-apple-darwin Rust targets, then run `CI=true corepack pnpm tauri build --target universal-apple-darwin --bundles dmg` in the bootstrap environment. The Windows bundle configuration includes the offline WebView2 installer. Developer ID signing, notarization, Authenticode signing and clean-system installation require the corresponding release environments.

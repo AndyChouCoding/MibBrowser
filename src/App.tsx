@@ -1,3 +1,4 @@
+import { version as appVersion } from "../package.json";
 import { open } from "@tauri-apps/plugin-dialog";
 import {
   Activity,
@@ -265,7 +266,7 @@ export function App() {
         <div className="brand">
           <div className="brand-mark"><Activity size={17} /></div>
           <span>MIB Browser</span>
-          <span className="version">0.1</span>
+          <span className="version">{appVersion}</span>
         </div>
         <div className="connection-bar">
           <label className="field compact target-field">

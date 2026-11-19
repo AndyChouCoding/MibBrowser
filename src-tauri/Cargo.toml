@@ -1,6 +1,6 @@
 [package]
 name = "mib-browser"
-version = "0.1.0"
+version = "1.0.0"
 description = "A modern cross-platform MIB browser"
 authors = ["MIB Browser contributors"]
 edition = "2021"
