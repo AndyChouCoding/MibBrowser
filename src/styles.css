@@ -3,6 +3,10 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 }
+.usm { position: relative; font-size: .8rem; }
+.usm summary { cursor: pointer; }
+.usm fieldset { position: absolute; z-index: 3; background: var(--panel); color: var(--text); top: 100%; right: 0; display: grid; gap: .6rem; padding: .8rem; }
+.usm label { display: grid; gap: .2rem; }
 
 * { box-sizing: border-box; }
 body { margin: 0; min-width: 1060px; min-height: 720px; overflow: hidden; }
@@ -98,3 +102,7 @@ button { color: inherit; }
 .result-row > code { color: var(--muted); font-size: 9px; }.result-row.table-head { height: 28px; background: var(--panel-2); color: var(--muted); text-transform: uppercase; letter-spacing: .5px; font-size: 8px; }.type-value { color: #b391ff; }
 footer { border-top: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; padding: 0 12px; color: var(--muted); font-size: 8px; background: var(--panel-2); }
 footer span { display: flex; gap: 6px; align-items: center; }.status-dot.online { background: var(--green); }
+
+.query-settings { position: absolute; top: 50px; right: 15px; z-index: 4; display: grid; gap: 8px; padding: 12px; background: var(--panel); border: 1px solid var(--line); }
+
+.set-review { position: fixed; inset: 15vh auto auto 32vw; z-index: 5; background: var(--panel); color: var(--text); border: 1px solid var(--line); padding: 20px; max-width: 45vw; overflow-wrap: anywhere; }

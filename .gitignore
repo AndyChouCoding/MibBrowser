@@ -2,9 +2,12 @@ node_modules/
 dist/
 target/
 src-tauri/target/
+src-tauri/gen/
 .DS_Store
 *.log
 .env
 .env.*
 !.env.example
 /docs/
+.tooling/
+/.pnpm-store/
