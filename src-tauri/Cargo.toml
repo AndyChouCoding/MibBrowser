@@ -1,6 +1,6 @@
 [package]
 name = "mib-browser"
-version = "0.1.0"
+version = "1.0.0"
 description = "A modern cross-platform MIB browser"
 authors = ["MIB Browser contributors"]
 edition = "2021"
@@ -13,6 +13,11 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+async-snmp = { version = "=0.18.1", default-features = false, features = ["crypto-rustcrypto"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+keyring = { version = "3.6", features = ["apple-native", "windows-native"] }
+uuid = { version = "1", features = ["v4"] }
+mib-rs = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tauri = { version = "2", features = [] }
@@ -20,3 +25,6 @@ tauri-plugin-dialog = "2"
 tauri-plugin-store = "2"
 thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+
+[dev-dependencies]
+bytes = "1"
